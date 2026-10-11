@@ -1,0 +1,85 @@
+# ==============================================================================
+# KarachiFlow .gitignore
+# ==============================================================================
+
+# Compiled Binaries & Objects
+*.exe
+*.out
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.lib
+*.a
+*.exp
+
+# MSVC / Debug Artifacts
+*.pdb
+*.idb
+*.ilk
+.vs/
+*.sln.docstates
+*.suo
+*.user
+x64/
+x86/
+Debug/
+Release/
+
+# Build Systems (CMake / Ninja)
+build/
+bin/
+out/
+dist/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# IDEs & Tooling
+.vscode/
+.idea/
+.cache/
+*.swp
+*~
+
+# Python (OSMnx Preprocessing & Analysis Scripts)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.env
+.pytest_cache/
+
+# Data & Large Files (Keep repository lightweight)
+data/
+*.osm
+*.pbf
+*.bin
+*.tar.gz
+*.zip
+
+# Simulation Outputs, Profiling & Telemetry
+logs/
+outputs/
+snapshots/
+*.log
+*.prof
+*.nvvp
+*.nsys-rep
+*.ncu-rep
+
+# OS Junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Academic References / Course Guidelines
+docs/PDC_Project_List.pdf
+
+# Local Agent Guides & Architecture Specs
+AGENTS.md
+CLAUDE.md
+.agents/
