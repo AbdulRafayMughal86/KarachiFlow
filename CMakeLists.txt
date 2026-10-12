@@ -38,4 +38,15 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
         target_link_libraries(karachiflow PRIVATE MPI::MPI_CXX)
         target_compile_definitions(karachiflow PRIVATE HAS_MPI=1)
     endif()
+
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/test_nasch_validation.cpp)
+        add_executable(test_nasch_validation ${CMAKE_SOURCE_DIR}/src/engine/test_nasch_validation.cpp ${CORE_SOURCES})
+        target_link_libraries(test_nasch_validation PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/test_simulation.cpp)
+        add_executable(test_simulation ${CMAKE_SOURCE_DIR}/src/engine/test_simulation.cpp ${CORE_SOURCES})
+        target_link_libraries(test_simulation PRIVATE OpenMP::OpenMP_CXX)
+    endif()
 endif()
+
