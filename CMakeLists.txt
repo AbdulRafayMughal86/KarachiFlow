@@ -53,5 +53,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
         add_executable(test_openmp_scaling ${CMAKE_SOURCE_DIR}/src/parallel/test_openmp_scaling.cpp ${CORE_SOURCES})
         target_link_libraries(test_openmp_scaling PRIVATE OpenMP::OpenMP_CXX)
     endif()
+
+    if(MPI_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/src/parallel/test_mpi_simulation.cpp)
+        add_executable(test_mpi_simulation ${CMAKE_SOURCE_DIR}/src/parallel/test_mpi_simulation.cpp ${CORE_SOURCES})
+        target_link_libraries(test_mpi_simulation PRIVATE OpenMP::OpenMP_CXX MPI::MPI_CXX)
+        target_compile_definitions(test_mpi_simulation PRIVATE HAS_MPI=1)
+    endif()
 endif()
 

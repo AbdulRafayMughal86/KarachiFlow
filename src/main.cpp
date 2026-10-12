@@ -6,6 +6,12 @@
 #include <algorithm>
 #include "simulation.hpp"
 #include "openmp_engine.hpp"
+#include "mpi_engine.hpp"
+#include "mpi_partitioner.hpp"
+
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+#include <mpi.h>
+#endif
 
 namespace {
 
@@ -15,6 +21,7 @@ void print_usage(const char* prog_name) {
               << "  --dev                     Fast developer mode (5,000 cars, 60s, <1s runtime)\n"
               << "  --cars <N>                Total target vehicles (default: 5000 in dev, 100000 in full)\n"
               << "  --steps <S>               Simulation timesteps (seconds) (default: 60 in dev, 3600 in full)\n"
+              << "  --mpi                     Run distributed-memory MPI engine\n"
               << "  --threads <T>             OpenMP thread count (default: all available cores)\n"
               << "  --schedule <type> [chunk] OpenMP loop schedule: static, dynamic, guided (default: dynamic 64)\n"
               << "  --chunk-size <N>          OpenMP scheduling chunk size (default: 64)\n"
@@ -39,6 +46,7 @@ int main(int argc, char* argv[]) {
     bool interval_set = false;
     bool use_sequential = false;
     bool run_benchmark = false;
+    bool use_mpi = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -47,6 +55,8 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (arg == "--dev") {
             config.dev_mode = true;
+        } else if (arg == "--mpi") {
+            use_mpi = true;
         } else if (arg == "--sequential") {
             use_sequential = true;
         } else if (arg == "--benchmark") {
@@ -105,17 +115,109 @@ int main(int argc, char* argv[]) {
         config.snapshot_interval = 0;
     }
 
-    std::cout << "========================================================\n";
-    std::cout << " KarachiFlow — Microscopic Traffic Simulation Engine   \n";
-    std::cout << "========================================================\n";
-    std::cout << "Configuration:\n";
-    std::cout << "  - Execution Mode:      " << (config.dev_mode ? "Developer Fast-Test (--dev)" : "Full-Scale Production") << "\n";
-    std::cout << "  - Target Vehicles:     " << config.target_vehicles << "\n";
-    std::cout << "  - Simulation Steps:    " << config.total_steps << " timesteps (dt = 1.0s)\n";
-    std::cout << "  - Snapshot Interval:   " << config.snapshot_interval << " s\n";
-    std::cout << "  - Random Slowdown p:   " << config.p_slow << "\n";
-    std::cout << "  - Network File:        " << config.network_path << "\n";
-    std::cout << "  - Metadata File:       " << config.metadata_path << "\n";
+    int mpi_rank = 0;
+    int mpi_size = 1;
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+    int mpi_init_status = 0;
+    MPI_Initialized(&mpi_init_status);
+    if (!mpi_init_status) {
+        MPI_Init(&argc, &argv);
+    }
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+    if (mpi_size > 1 && !use_sequential && !run_benchmark) {
+        use_mpi = true;
+    }
+
+    if (mpi_size > 1 && (use_sequential || run_benchmark) && mpi_rank != 0) {
+        MPI_Finalize();
+        return 0;
+    }
+#endif
+
+    if (mpi_rank == 0) {
+        std::cout << "========================================================\n";
+        std::cout << " KarachiFlow — Microscopic Traffic Simulation Engine   \n";
+        std::cout << "========================================================\n";
+        std::cout << "Configuration:\n";
+        std::cout << "  - Execution Mode:      " << (config.dev_mode ? "Developer Fast-Test (--dev)" : "Full-Scale Production") << "\n";
+        std::cout << "  - Target Vehicles:     " << config.target_vehicles << "\n";
+        std::cout << "  - Simulation Steps:    " << config.total_steps << " timesteps (dt = 1.0s)\n";
+        std::cout << "  - Snapshot Interval:   " << config.snapshot_interval << " s\n";
+        std::cout << "  - Random Slowdown p:   " << config.p_slow << "\n";
+        std::cout << "  - Network File:        " << config.network_path << "\n";
+        std::cout << "  - Metadata File:       " << config.metadata_path << "\n";
+    }
+
+    if (use_mpi) {
+        karachiflow::MPIEngine mpi_sim;
+        std::string err_msg;
+
+        const auto t_init_start = std::chrono::high_resolution_clock::now();
+        if (!mpi_sim.initialize(config, true, &err_msg)) {
+            if (mpi_rank == 0) {
+                std::cerr << "[ERROR] Distributed MPI simulation initialization failed: " << err_msg << "\n";
+            }
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+            MPI_Finalize();
+#endif
+            return 1;
+        }
+        const auto t_init_end = std::chrono::high_resolution_clock::now();
+        const double init_ms = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t_init_end - t_init_start).count()) / 1000.0;
+
+        if (mpi_rank == 0) {
+            std::cout << "  - Parallel Engine:     Distributed-Memory MPI (" << mpi_size << " processes)\n";
+            std::cout << "  - Boundary Mode:       Non-Blocking Halo Migration (MPI_Isend / MPI_Irecv)\n\n";
+            std::cout << "[SUCCESS] Ingestion, spatial partitioning & routing complete in "
+                      << std::fixed << std::setprecision(2) << init_ms << " ms\n";
+            std::cout << "  - Total Cut Edges:     " << mpi_sim.partition().cut_edges.size() << "\n";
+            std::cout << "  - Nodes:               " << mpi_sim.network().node_count() << "\n";
+            std::cout << "  - Segments:            " << mpi_sim.network().segment_count() << "\n";
+            std::cout << "  - Total 7.5m Cells:    " << mpi_sim.network().total_cells() << "\n\n";
+            std::cout << "Beginning distributed simulation step loop...\n";
+        }
+
+        mpi_sim.run();
+
+        uint64_t g_active = 0, g_completed = 0, g_injected = 0;
+        const bool conserved = mpi_sim.verify_global_conservation(&g_active, &g_completed, &g_injected);
+
+        if (mpi_rank == 0) {
+            const auto& metrics = mpi_sim.metrics();
+            std::cout << "\n========================================================\n";
+            std::cout << " Simulation Execution Summary (Distributed MPI Engine)\n";
+            std::cout << "========================================================\n";
+            std::cout << "  - MPI Processes:         " << mpi_size << "\n";
+            std::cout << "  - Execution Time:        " << std::fixed << std::setprecision(2)
+                      << metrics.total_sim_time_ms << " ms ("
+                      << (metrics.total_sim_time_ms / 1000.0) << " s)\n";
+            std::cout << "  - Simulated Steps:       " << metrics.steps_executed << "\n";
+            std::cout << "  - Injected Vehicles:     " << g_injected << "\n";
+            std::cout << "  - Active Vehicles:       " << g_active << "\n";
+            std::cout << "  - Completed Trips:       " << g_completed << "\n";
+            std::cout << "  - Vehicle Conservation:  " << (conserved ? "VERIFIED (100% Conserved)" : "MISMATCH") << "\n";
+            std::cout << "  - Max Rank Time:         " << metrics.max_rank_time_ms << " ms\n";
+            std::cout << "  - Avg Rank Time:         " << metrics.avg_rank_time_ms << " ms\n";
+            std::cout << "  - Load Imbalance:        " << std::setprecision(3)
+                      << metrics.load_imbalance_ratio << " (t_max / t_avg)\n";
+            std::cout << "  - MPI Waitall Latency:   " << std::fixed << std::setprecision(2)
+                      << metrics.comm_wait_time_ms << " ms\n";
+            std::cout << "  - Average Step Latency:  " << metrics.avg_step_time_us << " us/step\n";
+            std::cout << "  - Cell Update Rate:      " << std::scientific << std::setprecision(3)
+                      << metrics.updates_per_second << " cell updates/sec\n";
+            std::cout << "  - Average Network Speed: " << std::fixed << std::setprecision(2)
+                      << metrics.avg_network_speed << " cells/s ("
+                      << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
+            std::cout << "========================================================\n";
+        }
+
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        MPI_Finalize();
+#endif
+        return 0;
+    }
 
     if (run_benchmark) {
         std::cout << "\nRunning Multi-Thread PDC Scaling Benchmark...\n";
@@ -165,6 +267,13 @@ int main(int argc, char* argv[]) {
                       << std::setw(11) << mcells_sec << "\n";
         }
         std::cout << "------------------------------------------------------------------------------------\n";
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        int mpi_finalized = 0;
+        MPI_Finalized(&mpi_finalized);
+        if (!mpi_finalized) {
+            MPI_Finalize();
+        }
+#endif
         return 0;
     }
 
@@ -212,6 +321,13 @@ int main(int argc, char* argv[]) {
                   << metrics.avg_network_speed << " cells/s ("
                   << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
         std::cout << "========================================================\n";
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        int mpi_finalized = 0;
+        MPI_Finalized(&mpi_finalized);
+        if (!mpi_finalized) {
+            MPI_Finalize();
+        }
+#endif
         return 0;
     }
 
@@ -275,5 +391,12 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "========================================================\n";
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+    int mpi_finalized = 0;
+    MPI_Finalized(&mpi_finalized);
+    if (!mpi_finalized) {
+        MPI_Finalize();
+    }
+#endif
     return 0;
 }

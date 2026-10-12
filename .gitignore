@@ -84,3 +84,7 @@ docs/PDC_Project_List.pdf
 AGENTS.md
 CLAUDE.md
 .agents/
+
+# Scratch & Intermediate Tooling
+temp_msmpi/
+test_simple_mpi.cpp
