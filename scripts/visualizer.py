@@ -23,15 +23,15 @@ SEGMENT_STRUCT_BYTES = 28 # int32 id, int32 from, int32 to, int16 lanes, int16 c
 # Discrete speed mapping: 1 cell/s = 7.5 m/s = 27.0 km/h
 KMH_PER_CELL_PER_SEC = 27.0
 
-# Congestion color palette (RGBA)
-COLOR_FREE_FLOW = [0, 255, 136, 230]       # Neon Green: v >= 0.75 vmax, density < 0.3
-COLOR_MODERATE = [255, 195, 0, 230]        # Amber Yellow: 0.4 vmax <= v < 0.75 vmax
-COLOR_BOTTLENECK = [255, 30, 60, 240]      # Crimson Red: v < 0.4 vmax or density >= 0.5
-COLOR_INACTIVE = [45, 55, 72, 90]          # Subdued Slate: No active vehicles
+# Congestion color palette (RGBA) — High-contrast neon tones on dark basemap
+COLOR_FREE_FLOW = [0, 230, 118, 245]       # Vibrant Neon Green: v >= 0.75 vmax, low density
+COLOR_MODERATE = [255, 214, 0, 245]        # Bright Amber Yellow: 0.4 vmax <= v < 0.75 vmax
+COLOR_BOTTLENECK = [255, 23, 68, 255]      # Vivid Glowing Crimson Red: v < 0.4 vmax or density >= 0.5
+COLOR_INACTIVE = [50, 60, 80, 50]          # Faint subtle slate: No active vehicles
 
-# Zone boundary colors (RGBA)
-COLOR_RESIDENTIAL_ZONE = [0, 210, 255, 35]  # Subtle Neon Cyan fill
-COLOR_COMMERCIAL_ZONE = [255, 150, 0, 35]   # Subtle Warm Amber fill
+# Zone boundary colors (RGBA) — Thin crisp outlines without blocking fills
+COLOR_RESIDENTIAL_ZONE = [0, 210, 255, 180]  # Crisp Neon Cyan outline
+COLOR_COMMERCIAL_ZONE = [255, 150, 0, 180]   # Warm Amber outline
 
 
 def load_network_geometry(bin_path: str, metadata_path: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -151,19 +151,19 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     status_list[is_bottleneck] = "Severe Bottleneck (Queue)"
     merged["congestion_status"] = status_list
 
-    # Assign RGBA color tuples
+    # Assign RGBA color tuples as Python lists (critical for PyDeck JSON serialization)
     colors = np.empty((len(merged), 4), dtype=np.int32)
     colors[:] = COLOR_INACTIVE
     colors[is_free_flow] = COLOR_FREE_FLOW
     colors[is_moderate] = COLOR_MODERATE
     colors[is_bottleneck] = COLOR_BOTTLENECK
-    merged["color"] = list(colors)
+    merged["color"] = colors.tolist()
 
-    # Segment line width calculation based on lane count and congestion severity
+    # Sleek line widths: sharp and crisp to prevent black blobs on high density
     lanes = merged["lanes"].values
-    widths = np.full(len(merged), 1.5, dtype=np.float32)
+    widths = np.full(len(merged), 1.0, dtype=np.float32)
     active_mask = cars > 0
-    widths[active_mask] = np.clip(lanes[active_mask] * 1.5 + density[active_mask] * 4.0, 2.5, 9.0)
+    widths[active_mask] = np.clip(1.5 + lanes[active_mask] * 0.4 + density[active_mask] * 1.5, 1.8, 3.8)
     merged["line_width"] = widths
 
     return merged
@@ -184,37 +184,37 @@ def get_viewport_presets(metadata: Optional[Dict[str, Any]] = None) -> Dict[str,
         "Metropolitan Overview": pdk.ViewState(
             latitude=center_lat,
             longitude=center_lon,
-            zoom=11.6,
-            pitch=45,
+            zoom=11.8,
+            pitch=0,
             bearing=0,
         ),
         "Shahrah-e-Faisal Expressway": pdk.ViewState(
             latitude=24.868,
             longitude=67.082,
-            zoom=13.6,
-            pitch=50,
-            bearing=-35,
+            zoom=13.5,
+            pitch=15,
+            bearing=-25,
         ),
         "University Road Arterial": pdk.ViewState(
             latitude=24.925,
             longitude=67.112,
-            zoom=13.4,
-            pitch=45,
-            bearing=30,
+            zoom=13.5,
+            pitch=15,
+            bearing=20,
         ),
         "Saddar & I.I. Chundrigar Downtown": pdk.ViewState(
             latitude=24.854,
             longitude=67.016,
-            zoom=14.2,
-            pitch=52,
-            bearing=15,
+            zoom=14.0,
+            pitch=15,
+            bearing=10,
         ),
         "Clifton & Marine Drive Corridor": pdk.ViewState(
             latitude=24.818,
             longitude=67.032,
             zoom=13.8,
-            pitch=45,
-            bearing=-15,
+            pitch=15,
+            bearing=-10,
         ),
     }
 
@@ -315,12 +315,12 @@ def build_traffic_deck(
                 data=zones_df,
                 id="od-zones-polygons",
                 get_polygon="polygon",
-                get_fill_color="color",
-                get_line_color=[255, 255, 255, 120],
+                get_fill_color=[0, 0, 0, 0],
+                get_line_color="color",
                 get_line_width=1.5,
                 line_width_units="pixels",
                 stroked=True,
-                filled=True,
+                filled=False,
                 extruded=False,
                 pickable=False,
             )
@@ -337,8 +337,8 @@ def build_traffic_deck(
             get_color="color",
             get_width="line_width",
             width_units="pixels",
-            width_min_pixels=1.5,
-            width_max_pixels=10.0,
+            width_min_pixels=1.0,
+            width_max_pixels=4.0,
             pickable=True,
             auto_highlight=True,
             highlight_color=[255, 255, 255, 180],

@@ -206,39 +206,44 @@ def main():
         if sim_mode == "Historical Replay":
             st.markdown("### ⏱️ Time Scrubber")
 
-            # Session state for playback control
-            if "step_slider" not in st.session_state:
-                st.session_state.step_slider = step_numbers[-1]
+            if "active_step" not in st.session_state or st.session_state.active_step not in step_numbers:
+                st.session_state.active_step = step_numbers[-1]
             if "is_playing" not in st.session_state:
                 st.session_state.is_playing = False
+
+            def _jump_step(target):
+                st.session_state.active_step = target
+                st.session_state.step_slider_key = target
+
+            def _on_slider_change():
+                st.session_state.active_step = st.session_state.step_slider_key
+
+            # Step jump buttons with safe on_click callbacks (executed before widget instantiation)
+            current_val = st.session_state.active_step
+            current_idx = step_numbers.index(current_val) if current_val in step_numbers else len(step_numbers) - 1
+
+            col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+            with col_btn1:
+                st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), use_container_width=True)
+            with col_btn2:
+                prev_step = step_numbers[max(0, current_idx - 1)]
+                st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), use_container_width=True)
+            with col_btn3:
+                next_step = step_numbers[min(len(step_numbers) - 1, current_idx + 1)]
+                st.button("Next ▶", on_click=_jump_step, args=(next_step,), use_container_width=True)
+            with col_btn4:
+                st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), use_container_width=True)
 
             # Step slider
             selected_step = st.select_slider(
                 "Simulation Step ($t$ seconds)",
                 options=step_numbers,
-                key="step_slider",
+                value=st.session_state.active_step,
+                key="step_slider_key",
+                on_change=_on_slider_change,
                 help="Select the exact second of simulated traffic flow.",
             )
             current_idx = step_numbers.index(selected_step)
-
-            # Step jump buttons
-            col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
-            with col_btn1:
-                if st.button("⏮ First", width="stretch"):
-                    st.session_state.step_slider = step_numbers[0]
-                    st.rerun()
-            with col_btn2:
-                if st.button("◀ Prev", width="stretch"):
-                    st.session_state.step_slider = step_numbers[max(0, current_idx - 1)]
-                    st.rerun()
-            with col_btn3:
-                if st.button("Next ▶", width="stretch"):
-                    st.session_state.step_slider = step_numbers[min(len(step_numbers) - 1, current_idx + 1)]
-                    st.rerun()
-            with col_btn4:
-                if st.button("Latest ⏭", width="stretch"):
-                    st.session_state.step_slider = step_numbers[-1]
-                    st.rerun()
 
             # Replay Auto-Play Toggle
             auto_play = st.toggle("Auto-Play Timeline", value=st.session_state.is_playing)
@@ -253,7 +258,7 @@ def main():
             play_speed = 0.8
             auto_poll = st.toggle("Auto-Refresh Telemetry", value=False)
             poll_interval = st.slider("Live Poll Interval (s)", 1.0, 5.0, 2.0, 0.5, key="poll_slider", disabled=not auto_poll)
-            if st.button("🔄 Refresh Telemetry Now", width="stretch"):
+            if st.button("🔄 Refresh Telemetry Now", use_container_width=True):
                 st.rerun()
             st.caption(f"Currently tracking newest step: **t = {selected_step} s**")
 
@@ -284,7 +289,7 @@ def main():
 
         col_lay1, col_lay2 = st.columns(2)
         with col_lay1:
-            show_zones = st.checkbox("Show OD Zones", value=True)
+            show_zones = st.checkbox("Show OD Zones", value=False)
         with col_lay2:
             show_heatmap = st.checkbox("Bottleneck Heatmap", value=False)
 
@@ -637,7 +642,8 @@ def main():
     if sim_mode == "Historical Replay" and auto_play and st.session_state.is_playing:
         time.sleep(play_speed)
         next_idx = (current_idx + 1) % len(step_numbers)
-        st.session_state.step_slider = step_numbers[next_idx]
+        st.session_state.active_step = step_numbers[next_idx]
+        st.session_state.step_slider_key = step_numbers[next_idx]
         st.rerun()
     elif sim_mode == "Live Simulation Monitor" and auto_poll:
         time.sleep(poll_interval)
