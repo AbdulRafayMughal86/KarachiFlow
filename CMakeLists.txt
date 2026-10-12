@@ -17,7 +17,7 @@ endif()
 find_package(OpenMP REQUIRED)
 find_package(MPI QUIET)
 
-include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/engine)
+include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/engine ${CMAKE_SOURCE_DIR}/src/parallel)
 
 # Network binary reader and benchmark target
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/test_network_reader.cpp)
@@ -47,6 +47,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
     if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/test_simulation.cpp)
         add_executable(test_simulation ${CMAKE_SOURCE_DIR}/src/engine/test_simulation.cpp ${CORE_SOURCES})
         target_link_libraries(test_simulation PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/parallel/test_openmp_scaling.cpp)
+        add_executable(test_openmp_scaling ${CMAKE_SOURCE_DIR}/src/parallel/test_openmp_scaling.cpp ${CORE_SOURCES})
+        target_link_libraries(test_openmp_scaling PRIVATE OpenMP::OpenMP_CXX)
     endif()
 endif()
 

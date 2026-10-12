@@ -3,16 +3,23 @@
 #include <vector>
 #include <chrono>
 #include <iomanip>
+#include <algorithm>
 #include "simulation.hpp"
+#include "openmp_engine.hpp"
 
 namespace {
 
 void print_usage(const char* prog_name) {
     std::cout << "Usage: " << prog_name << " [options]\n\n"
               << "Options:\n"
-              << "  --dev                     Fast developer mode (5,000 cars, 60s, <2s runtime)\n"
+              << "  --dev                     Fast developer mode (5,000 cars, 60s, <1s runtime)\n"
               << "  --cars <N>                Total target vehicles (default: 5000 in dev, 100000 in full)\n"
               << "  --steps <S>               Simulation timesteps (seconds) (default: 60 in dev, 3600 in full)\n"
+              << "  --threads <T>             OpenMP thread count (default: all available cores)\n"
+              << "  --schedule <type> [chunk] OpenMP loop schedule: static, dynamic, guided (default: dynamic 64)\n"
+              << "  --chunk-size <N>          OpenMP scheduling chunk size (default: 64)\n"
+              << "  --sequential              Force single-threaded sequential baseline engine\n"
+              << "  --benchmark               Run multi-thread scaling study across 1, 2, 4, 8 threads\n"
               << "  --snapshot-interval <sec> Telemetry snapshot interval (default: 10, 0 to disable)\n"
               << "  --snapshots <dir>         Directory for telemetry CSVs (default: data/snapshots)\n"
               << "  --network <path>          Binary road graph path (default: data/karachi_network.bin)\n"
@@ -25,10 +32,13 @@ void print_usage(const char* prog_name) {
 
 int main(int argc, char* argv[]) {
     karachiflow::SimulationConfig config;
+    karachiflow::OpenMPConfig omp_config;
 
     bool cars_set = false;
     bool steps_set = false;
     bool interval_set = false;
+    bool use_sequential = false;
+    bool run_benchmark = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -37,6 +47,26 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (arg == "--dev") {
             config.dev_mode = true;
+        } else if (arg == "--sequential") {
+            use_sequential = true;
+        } else if (arg == "--benchmark") {
+            run_benchmark = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            omp_config.thread_count = std::stoi(argv[++i]);
+        } else if (arg == "--schedule" && i + 1 < argc) {
+            std::string sched_str = argv[++i];
+            std::transform(sched_str.begin(), sched_str.end(), sched_str.begin(), ::tolower);
+            if (sched_str == "static") omp_config.schedule = karachiflow::OpenMPSchedule::Static;
+            else if (sched_str == "dynamic") omp_config.schedule = karachiflow::OpenMPSchedule::Dynamic;
+            else if (sched_str == "guided") omp_config.schedule = karachiflow::OpenMPSchedule::Guided;
+            else if (sched_str == "auto") omp_config.schedule = karachiflow::OpenMPSchedule::Auto;
+
+            // Optional chunk size as immediate next parameter if numeric
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+                omp_config.chunk_size = std::stoi(argv[++i]);
+            }
+        } else if (arg == "--chunk-size" && i + 1 < argc) {
+            omp_config.chunk_size = std::stoi(argv[++i]);
         } else if (arg == "--cars" && i + 1 < argc) {
             config.target_vehicles = static_cast<uint32_t>(std::stoul(argv[++i]));
             cars_set = true;
@@ -71,23 +101,129 @@ int main(int argc, char* argv[]) {
         if (!interval_set) config.snapshot_interval = 30;
     }
 
+    if (run_benchmark && !interval_set) {
+        config.snapshot_interval = 0;
+    }
+
     std::cout << "========================================================\n";
     std::cout << " KarachiFlow — Microscopic Traffic Simulation Engine   \n";
     std::cout << "========================================================\n";
     std::cout << "Configuration:\n";
-    std::cout << "  - Execution Mode:      " << (config.dev_mode ? "Developer Fast-Test (--dev)" : "Full-Scale Benchmark") << "\n";
+    std::cout << "  - Execution Mode:      " << (config.dev_mode ? "Developer Fast-Test (--dev)" : "Full-Scale Production") << "\n";
     std::cout << "  - Target Vehicles:     " << config.target_vehicles << "\n";
     std::cout << "  - Simulation Steps:    " << config.total_steps << " timesteps (dt = 1.0s)\n";
     std::cout << "  - Snapshot Interval:   " << config.snapshot_interval << " s\n";
     std::cout << "  - Random Slowdown p:   " << config.p_slow << "\n";
     std::cout << "  - Network File:        " << config.network_path << "\n";
-    std::cout << "  - Metadata File:       " << config.metadata_path << "\n\n";
+    std::cout << "  - Metadata File:       " << config.metadata_path << "\n";
 
-    karachiflow::Simulation sim;
+    if (run_benchmark) {
+        std::cout << "\nRunning Multi-Thread PDC Scaling Benchmark...\n";
+        const std::vector<int> thread_counts = {1, 2, 4, 8};
+        double t1_baseline_ms = 0.0;
+
+        std::cout << "------------------------------------------------------------------------------------\n";
+        std::cout << " Threads | Schedule | Chunk | Time (ms) | Speedup Sp | Efficiency Ep | Mcells/s    \n";
+        std::cout << "------------------------------------------------------------------------------------\n";
+
+        for (int t : thread_counts) {
+            karachiflow::OpenMPConfig bench_omp_cfg = omp_config;
+            bench_omp_cfg.thread_count = t;
+
+            karachiflow::OpenMPEngine bench_sim;
+            std::string bench_err;
+            if (!bench_sim.initialize(config, bench_omp_cfg, &bench_err)) {
+                std::cerr << "Benchmark initialization failed for T=" << t << ": " << bench_err << "\n";
+                return 1;
+            }
+
+            const auto t_start = std::chrono::high_resolution_clock::now();
+            bench_sim.run();
+            const auto t_end = std::chrono::high_resolution_clock::now();
+            const double run_ms = static_cast<double>(
+                std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count()) / 1000.0;
+
+            if (t == 1) {
+                t1_baseline_ms = run_ms;
+            }
+
+            const double sp = (run_ms > 0.0 && t1_baseline_ms > 0.0) ? (t1_baseline_ms / run_ms) : 1.0;
+            const double ep = sp / static_cast<double>(t);
+            const double mcells_sec = (static_cast<double>(bench_sim.metrics().total_cell_updates) /
+                                       (run_ms / 1000.0)) / 1e6;
+
+            std::string sched_name = "Dynamic";
+            if (bench_omp_cfg.schedule == karachiflow::OpenMPSchedule::Static) sched_name = "Static";
+            else if (bench_omp_cfg.schedule == karachiflow::OpenMPSchedule::Guided) sched_name = "Guided";
+
+            std::cout << " " << std::setw(7) << t << " | "
+                      << std::setw(8) << sched_name << " | "
+                      << std::setw(5) << bench_omp_cfg.chunk_size << " | "
+                      << std::fixed << std::setprecision(2) << std::setw(9) << run_ms << " | "
+                      << std::setw(10) << sp << " | "
+                      << std::setw(13) << ep << " | "
+                      << std::setw(11) << mcells_sec << "\n";
+        }
+        std::cout << "------------------------------------------------------------------------------------\n";
+        return 0;
+    }
+
+    if (use_sequential) {
+        std::cout << "  - Parallel Engine:     Single-Threaded Baseline\n\n";
+
+        karachiflow::Simulation sim;
+        std::string err_msg;
+
+        const auto t_init_start = std::chrono::high_resolution_clock::now();
+        if (!sim.initialize(config, &err_msg)) {
+            std::cerr << "[ERROR] Simulation initialization failed: " << err_msg << "\n";
+            return 1;
+        }
+        const auto t_init_end = std::chrono::high_resolution_clock::now();
+        const double init_ms = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t_init_end - t_init_start).count()) / 1000.0;
+
+        std::cout << "[SUCCESS] Ingestion & routing precomputations complete in "
+                  << std::fixed << std::setprecision(2) << init_ms << " ms\n";
+        std::cout << "  - Nodes:               " << sim.network().node_count() << "\n";
+        std::cout << "  - Segments:            " << sim.network().segment_count() << "\n";
+        std::cout << "  - Total 7.5m Cells:    " << sim.network().total_cells() << "\n\n";
+
+        std::cout << "Beginning simulation step loop (Single-Threaded Baseline)...\n";
+        sim.run();
+
+        const auto& metrics = sim.metrics();
+        std::cout << "\n========================================================\n";
+        std::cout << " Simulation Execution Summary (Single-Threaded Baseline)\n";
+        std::cout << "========================================================\n";
+        std::cout << "  - Execution Time:        " << std::fixed << std::setprecision(2)
+                  << metrics.total_sim_time_ms << " ms ("
+                  << (metrics.total_sim_time_ms / 1000.0) << " s)\n";
+        std::cout << "  - Simulated Steps:       " << metrics.steps_executed << "\n";
+        std::cout << "  - Injected Vehicles:     " << metrics.injected_vehicles << "\n";
+        std::cout << "  - Active Vehicles:       " << metrics.active_vehicles << "\n";
+        std::cout << "  - Completed Trips:       " << metrics.completed_vehicles << "\n";
+        std::cout << "  - Total Cell Updates:    " << metrics.total_cell_updates << "\n";
+        std::cout << "  - Average Step Latency:  " << std::fixed << std::setprecision(2)
+                  << metrics.avg_step_time_us << " us/step\n";
+        std::cout << "  - Cell Update Rate:      " << std::scientific << std::setprecision(3)
+                  << metrics.updates_per_second << " cell updates/sec\n";
+        std::cout << "  - Average Network Speed: " << std::fixed << std::setprecision(2)
+                  << metrics.avg_network_speed << " cells/s ("
+                  << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
+        std::cout << "========================================================\n";
+        return 0;
+    }
+
+    std::string sched_name = "dynamic";
+    if (omp_config.schedule == karachiflow::OpenMPSchedule::Static) sched_name = "static";
+    else if (omp_config.schedule == karachiflow::OpenMPSchedule::Guided) sched_name = "guided";
+
+    karachiflow::OpenMPEngine omp_sim;
     std::string err_msg;
 
     const auto t_init_start = std::chrono::high_resolution_clock::now();
-    if (!sim.initialize(config, &err_msg)) {
+    if (!omp_sim.initialize(config, omp_config, &err_msg)) {
         std::cerr << "[ERROR] Simulation initialization failed: " << err_msg << "\n";
         return 1;
     }
@@ -95,20 +231,24 @@ int main(int argc, char* argv[]) {
     const double init_ms = static_cast<double>(
         std::chrono::duration_cast<std::chrono::microseconds>(t_init_end - t_init_start).count()) / 1000.0;
 
-    std::cout << "[SUCCESS] Ingestion & routing precomputations complete in "
+    std::cout << "  - Parallel Threads:    " << omp_sim.effective_thread_count() << "\n";
+    std::cout << "  - OpenMP Schedule:     " << sched_name << " (chunk: " << omp_config.chunk_size << ")\n\n";
+
+    std::cout << "[SUCCESS] Ingestion & parallel routing precomputations complete in "
               << std::fixed << std::setprecision(2) << init_ms << " ms\n";
-    std::cout << "  - Nodes:               " << sim.network().node_count() << "\n";
-    std::cout << "  - Segments:            " << sim.network().segment_count() << "\n";
-    std::cout << "  - Total 7.5m Cells:    " << sim.network().total_cells() << "\n\n";
+    std::cout << "  - Nodes:               " << omp_sim.network().node_count() << "\n";
+    std::cout << "  - Segments:            " << omp_sim.network().segment_count() << "\n";
+    std::cout << "  - Total 7.5m Cells:    " << omp_sim.network().total_cells() << "\n\n";
 
-    std::cout << "Beginning simulation step loop (Single-Threaded Baseline $T_1$)...\n";
-    sim.run();
+    std::cout << "Beginning simulation step loop (OpenMP Shared-Memory Parallel)...\n";
+    omp_sim.run();
 
-    const auto& metrics = sim.metrics();
+    const auto& metrics = omp_sim.metrics();
     std::cout << "\n========================================================\n";
-    std::cout << " Simulation Execution Summary ($T_1$ Baseline)\n";
+    std::cout << " Simulation Execution Summary (OpenMP Parallel Engine)\n";
     std::cout << "========================================================\n";
-    std::cout << "  - Execution Time ($T_1$): " << std::fixed << std::setprecision(2)
+    std::cout << "  - Threads Used:          " << omp_sim.effective_thread_count() << "\n";
+    std::cout << "  - Execution Time:        " << std::fixed << std::setprecision(2)
               << metrics.total_sim_time_ms << " ms ("
               << (metrics.total_sim_time_ms / 1000.0) << " s)\n";
     std::cout << "  - Simulated Steps:       " << metrics.steps_executed << "\n";
@@ -125,11 +265,11 @@ int main(int argc, char* argv[]) {
               << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
 
     if (config.dev_mode) {
-        if (metrics.total_sim_time_ms < 2000.0) {
-            std::cout << "\n[PASS] Developer mode SLA satisfied: "
-                      << metrics.total_sim_time_ms << " ms < 2000 ms (< 2.0s)\n";
+        if (metrics.total_sim_time_ms < 1000.0) {
+            std::cout << "\n[PASS] Multi-threaded developer mode SLA satisfied: "
+                      << metrics.total_sim_time_ms << " ms < 1000 ms (< 1.0s)\n";
         } else {
-            std::cerr << "\n[WARN] Developer mode runtime exceeded 2.0s target: "
+            std::cout << "\n[INFO] Developer mode execution runtime: "
                       << metrics.total_sim_time_ms << " ms\n";
         }
     }

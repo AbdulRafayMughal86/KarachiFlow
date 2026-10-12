@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <cstdio>
 
 namespace karachiflow {
 
@@ -468,24 +469,30 @@ bool Simulation::save_snapshot(uint32_t /*step*/, const std::string& filepath) c
         }
     }
 
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
+    FILE* fp = std::fopen(filepath.c_str(), "w");
+    if (!fp) {
         return false;
     }
-    std::vector<char> io_buffer(65536);
-    file.rdbuf()->pubsetbuf(io_buffer.data(), io_buffer.size());
 
-    file << "segment_id,vehicle_count,avg_speed,density_ratio\n";
+    std::vector<char> io_buffer(262144);
+    std::setvbuf(fp, io_buffer.data(), _IOFBF, io_buffer.size());
+
+    std::fputs("segment_id,vehicle_count,avg_speed,density_ratio\n", fp);
+    char line_buf[128];
+
     for (uint32_t s = 0; s < seg_count; ++s) {
         const uint32_t cnt = m_snapshot_counts[s];
-        const float avg_spd = (cnt > 0) ? (static_cast<float>(m_snapshot_speeds[s]) / static_cast<float>(cnt)) : 0.0f;
-        const float density = static_cast<float>(cnt) / static_cast<float>(m_segments[s].total_cells());
-
-        file << s << ',' << cnt << ','
-             << std::fixed << std::setprecision(4) << avg_spd << ','
-             << density << '\n';
+        if (cnt == 0) {
+            std::snprintf(line_buf, sizeof(line_buf), "%u,0,0.0000,0.0000\n", s);
+        } else {
+            const float avg_spd = static_cast<float>(m_snapshot_speeds[s]) / static_cast<float>(cnt);
+            const float density = static_cast<float>(cnt) / static_cast<float>(m_segments[s].total_cells());
+            std::snprintf(line_buf, sizeof(line_buf), "%u,%u,%.4f,%.4f\n", s, cnt, avg_spd, density);
+        }
+        std::fputs(line_buf, fp);
     }
 
+    std::fclose(fp);
     return true;
 }
 
