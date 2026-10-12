@@ -315,6 +315,31 @@ class TestDashboardStreamlitApp(unittest.TestCase):
         self.assertEqual(veh_metric.value, "4,964")
         self.assertEqual(comp_metric.value, "36")
 
+        # Test jump buttons (First, Next, Prev, Latest) execute without widget instantiation errors
+        btn_dict = {btn.label: btn for btn in at.button}
+        if "⏮ First" in btn_dict:
+            btn_dict["⏮ First"].click().run(timeout=30)
+            self.assertEqual(len(at.exception), 0)
+            self.assertEqual(at.session_state.active_step, 0)
+
+        btn_dict = {btn.label: btn for btn in at.button}
+        if "Next ▶" in btn_dict:
+            btn_dict["Next ▶"].click().run(timeout=30)
+            self.assertEqual(len(at.exception), 0)
+            self.assertEqual(at.session_state.active_step, 10)
+
+        btn_dict = {btn.label: btn for btn in at.button}
+        if "◀ Prev" in btn_dict:
+            btn_dict["◀ Prev"].click().run(timeout=30)
+            self.assertEqual(len(at.exception), 0)
+            self.assertEqual(at.session_state.active_step, 0)
+
+        btn_dict = {btn.label: btn for btn in at.button}
+        if "Latest ⏭" in btn_dict:
+            btn_dict["Latest ⏭"].click().run(timeout=30)
+            self.assertEqual(len(at.exception), 0)
+            self.assertEqual(at.session_state.active_step, 60)
+
     def test_streamlit_live_monitor_mode(self):
         """Verifies execution when switching to Live Simulation Monitor mode."""
         from streamlit.testing.v1 import AppTest

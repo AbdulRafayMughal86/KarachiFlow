@@ -275,7 +275,7 @@ def build_traffic_deck(
     metadata: Dict[str, Any],
     view_state: pdk.ViewState,
     display_mode: str = "Active Traffic Only",
-    show_zones: bool = True,
+    show_zones: bool = False,
     show_heatmap: bool = False,
 ) -> pdk.Deck:
     """

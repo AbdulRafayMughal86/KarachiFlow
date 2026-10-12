@@ -211,12 +211,15 @@ def main():
             if "is_playing" not in st.session_state:
                 st.session_state.is_playing = False
 
-            def _jump_step(target):
+            def _jump_step(target: int):
                 st.session_state.active_step = target
-                st.session_state.step_slider_key = target
+                st.session_state.step_slider = target
 
             def _on_slider_change():
-                st.session_state.active_step = st.session_state.step_slider_key
+                st.session_state.active_step = st.session_state.step_slider
+
+            # Synchronize widget state with active_step before widget instantiation
+            st.session_state.step_slider = st.session_state.active_step
 
             # Step jump buttons with safe on_click callbacks (executed before widget instantiation)
             current_val = st.session_state.active_step
@@ -238,8 +241,7 @@ def main():
             selected_step = st.select_slider(
                 "Simulation Step ($t$ seconds)",
                 options=step_numbers,
-                value=st.session_state.active_step,
-                key="step_slider_key",
+                key="step_slider",
                 on_change=_on_slider_change,
                 help="Select the exact second of simulated traffic flow.",
             )
@@ -643,7 +645,6 @@ def main():
         time.sleep(play_speed)
         next_idx = (current_idx + 1) % len(step_numbers)
         st.session_state.active_step = step_numbers[next_idx]
-        st.session_state.step_slider_key = step_numbers[next_idx]
         st.rerun()
     elif sim_mode == "Live Simulation Monitor" and auto_poll:
         time.sleep(poll_interval)
