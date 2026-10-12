@@ -59,5 +59,12 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
         target_link_libraries(test_mpi_simulation PRIVATE OpenMP::OpenMP_CXX MPI::MPI_CXX)
         target_compile_definitions(test_mpi_simulation PRIVATE HAS_MPI=1)
     endif()
+
+    if(MPI_FOUND AND EXISTS ${CMAKE_SOURCE_DIR}/src/parallel/test_hybrid_simulation.cpp)
+        add_executable(test_hybrid_simulation ${CMAKE_SOURCE_DIR}/src/parallel/test_hybrid_simulation.cpp ${CORE_SOURCES})
+        target_link_libraries(test_hybrid_simulation PRIVATE OpenMP::OpenMP_CXX MPI::MPI_CXX)
+        target_compile_definitions(test_hybrid_simulation PRIVATE HAS_MPI=1)
+    endif()
 endif()
+
 

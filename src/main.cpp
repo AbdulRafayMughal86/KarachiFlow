@@ -8,6 +8,7 @@
 #include "openmp_engine.hpp"
 #include "mpi_engine.hpp"
 #include "mpi_partitioner.hpp"
+#include "hybrid_engine.hpp"
 
 #if defined(HAS_MPI) || defined(MPI_VERSION)
 #include <mpi.h>
@@ -22,11 +23,12 @@ void print_usage(const char* prog_name) {
               << "  --cars <N>                Total target vehicles (default: 5000 in dev, 100000 in full)\n"
               << "  --steps <S>               Simulation timesteps (seconds) (default: 60 in dev, 3600 in full)\n"
               << "  --mpi                     Run distributed-memory MPI engine\n"
+              << "  --hybrid                  Run hybrid orchestration engine (MPI + OpenMP)\n"
               << "  --threads <T>             OpenMP thread count (default: all available cores)\n"
               << "  --schedule <type> [chunk] OpenMP loop schedule: static, dynamic, guided (default: dynamic 64)\n"
               << "  --chunk-size <N>          OpenMP scheduling chunk size (default: 64)\n"
               << "  --sequential              Force single-threaded sequential baseline engine\n"
-              << "  --benchmark               Run multi-thread scaling study across 1, 2, 4, 8 threads\n"
+              << "  --benchmark               Run scaling study across worker configurations\n"
               << "  --snapshot-interval <sec> Telemetry snapshot interval (default: 10, 0 to disable)\n"
               << "  --snapshots <dir>         Directory for telemetry CSVs (default: data/snapshots)\n"
               << "  --network <path>          Binary road graph path (default: data/karachi_network.bin)\n"
@@ -47,6 +49,7 @@ int main(int argc, char* argv[]) {
     bool use_sequential = false;
     bool run_benchmark = false;
     bool use_mpi = false;
+    bool use_hybrid = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -57,6 +60,8 @@ int main(int argc, char* argv[]) {
             config.dev_mode = true;
         } else if (arg == "--mpi") {
             use_mpi = true;
+        } else if (arg == "--hybrid") {
+            use_hybrid = true;
         } else if (arg == "--sequential") {
             use_sequential = true;
         } else if (arg == "--benchmark") {
@@ -121,15 +126,16 @@ int main(int argc, char* argv[]) {
     int mpi_init_status = 0;
     MPI_Initialized(&mpi_init_status);
     if (!mpi_init_status) {
-        MPI_Init(&argc, &argv);
+        int provided = 0;
+        MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
     }
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
-    if (mpi_size > 1 && !use_sequential && !run_benchmark) {
+    if (mpi_size > 1 && !use_sequential && !run_benchmark && !use_hybrid && !use_mpi) {
         use_mpi = true;
     }
 
-    if (mpi_size > 1 && (use_sequential || run_benchmark) && mpi_rank != 0) {
+    if (mpi_size > 1 && !use_hybrid && (use_sequential || (run_benchmark && !use_hybrid)) && mpi_rank != 0) {
         MPI_Finalize();
         return 0;
     }
@@ -148,6 +154,171 @@ int main(int argc, char* argv[]) {
         std::cout << "  - Network File:        " << config.network_path << "\n";
         std::cout << "  - Metadata File:       " << config.metadata_path << "\n";
     }
+
+    if (use_hybrid && run_benchmark) {
+        if (mpi_rank == 0) {
+            std::cout << "\nRunning Hybrid PDC Scaling Study (MPI + OpenMP)...\n";
+            std::cout << "  - MPI Processes (P): " << mpi_size << "\n";
+        }
+
+        const std::vector<int> thread_counts = {1, 2, 4, 8};
+        double t_t1_baseline_ms = 0.0;
+
+        if (mpi_rank == 0) {
+            std::cout << "---------------------------------------------------------------------------------------------------------------------------------\n";
+            std::cout << " Ranks (P) | Threads (T) | Workers (W) | Time (ms) | Speedup Sp | Efficiency Ep | Comm/Comp R_comm | Imbalance lambda | Mcells/s\n";
+            std::cout << "---------------------------------------------------------------------------------------------------------------------------------\n";
+        }
+
+        for (int t : thread_counts) {
+            karachiflow::OpenMPConfig bench_omp_cfg = omp_config;
+            bench_omp_cfg.thread_count = t;
+
+            karachiflow::HybridEngine bench_sim;
+            std::string bench_err;
+            if (!bench_sim.initialize(config, bench_omp_cfg, true, &bench_err)) {
+                if (mpi_rank == 0) {
+                    std::cerr << "Hybrid benchmark initialization failed for T=" << t << ": " << bench_err << "\n";
+                }
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+                MPI_Finalize();
+#endif
+                return 1;
+            }
+
+            bench_sim.run();
+
+            uint64_t g_act = 0, g_comp = 0, g_inj = 0;
+            bench_sim.verify_global_conservation(&g_act, &g_comp, &g_inj);
+
+            const double run_ms = bench_sim.metrics().max_rank_time_ms;
+            if (t == 1) {
+                t_t1_baseline_ms = run_ms;
+            }
+
+            if (mpi_rank == 0) {
+                const auto& m = bench_sim.metrics();
+                const int workers = mpi_size * t;
+                const double sp = (run_ms > 0.0 && t_t1_baseline_ms > 0.0) ? (t_t1_baseline_ms / run_ms) : 1.0;
+                const double ep = sp / static_cast<double>(t);
+                const double r_comm = m.comm_to_compute_ratio;
+                const double lambda = m.load_imbalance_ratio;
+                const double mcells_sec = (static_cast<double>(m.total_cell_updates) / (run_ms / 1000.0)) / 1e6;
+
+                std::cout << " " << std::setw(9) << mpi_size << " | "
+                          << std::setw(11) << t << " | "
+                          << std::setw(11) << workers << " | "
+                          << std::fixed << std::setprecision(2) << std::setw(9) << run_ms << " | "
+                          << std::setw(9) << sp << "x | "
+                          << std::setw(13) << std::setprecision(3) << ep << " | "
+                          << std::setw(16) << std::setprecision(3) << r_comm << " | "
+                          << std::setw(16) << std::setprecision(3) << lambda << " | "
+                          << std::fixed << std::setprecision(2) << std::setw(9) << mcells_sec << "\n";
+            }
+        }
+
+        if (mpi_rank == 0) {
+            std::cout << "---------------------------------------------------------------------------------------------------------------------------------\n";
+        }
+
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        MPI_Finalize();
+#endif
+        return 0;
+    }
+
+    if (use_hybrid) {
+        karachiflow::HybridEngine hybrid_sim;
+        std::string err_msg;
+
+        const auto t_init_start = std::chrono::high_resolution_clock::now();
+        if (!hybrid_sim.initialize(config, omp_config, true, &err_msg)) {
+            if (mpi_rank == 0) {
+                std::cerr << "[ERROR] Hybrid simulation initialization failed: " << err_msg << "\n";
+            }
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+            MPI_Finalize();
+#endif
+            return 1;
+        }
+        const auto t_init_end = std::chrono::high_resolution_clock::now();
+        const double init_ms = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t_init_end - t_init_start).count()) / 1000.0;
+
+        std::string sched_name = "dynamic";
+        if (omp_config.schedule == karachiflow::OpenMPSchedule::Static) sched_name = "static";
+        else if (omp_config.schedule == karachiflow::OpenMPSchedule::Guided) sched_name = "guided";
+
+        if (mpi_rank == 0) {
+            std::cout << "  - Parallel Engine:       Hybrid Orchestration (MPI + OpenMP)\n";
+            std::cout << "  - MPI Processes (P):     " << mpi_size << "\n";
+            std::cout << "  - Threads per Rank (T):  " << hybrid_sim.effective_thread_count() << "\n";
+            std::cout << "  - Total Compute Workers: " << hybrid_sim.total_workers() << " workers (P x T)\n";
+            std::cout << "  - OpenMP Schedule:       " << sched_name << " (chunk: " << omp_config.chunk_size << ")\n";
+            std::cout << "  - Boundary Mode:         Non-Blocking Halo Migration (MPI_Isend / MPI_Irecv)\n\n";
+            std::cout << "[SUCCESS] Ingestion, spatial partitioning & routing complete in "
+                      << std::fixed << std::setprecision(2) << init_ms << " ms\n";
+            std::cout << "  - Total Cut Edges:       " << hybrid_sim.partition().cut_edges.size() << "\n";
+            std::cout << "  - Nodes:                 " << hybrid_sim.network().node_count() << "\n";
+            std::cout << "  - Segments:              " << hybrid_sim.network().segment_count() << "\n";
+            std::cout << "  - Total 7.5m Cells:      " << hybrid_sim.network().total_cells() << "\n\n";
+            std::cout << "Beginning hybrid simulation step loop...\n";
+        }
+
+        hybrid_sim.run();
+
+        uint64_t g_active = 0, g_completed = 0, g_injected = 0;
+        const bool conserved = hybrid_sim.verify_global_conservation(&g_active, &g_completed, &g_injected);
+
+        if (mpi_rank == 0) {
+            const auto& metrics = hybrid_sim.metrics();
+            std::cout << "\n========================================================\n";
+            std::cout << " Simulation Execution Summary (Hybrid Parallel Engine)\n";
+            std::cout << "========================================================\n";
+            std::cout << "  - MPI Processes (P):     " << mpi_size << "\n";
+            std::cout << "  - Threads per Rank (T):  " << hybrid_sim.effective_thread_count() << "\n";
+            std::cout << "  - Total Compute Workers: " << hybrid_sim.total_workers() << "\n";
+            std::cout << "  - Execution Time:        " << std::fixed << std::setprecision(2)
+                      << metrics.total_sim_time_ms << " ms ("
+                      << (metrics.total_sim_time_ms / 1000.0) << " s)\n";
+            std::cout << "  - Simulated Steps:       " << metrics.steps_executed << "\n";
+            std::cout << "  - Injected Vehicles:     " << g_injected << "\n";
+            std::cout << "  - Active Vehicles:       " << g_active << "\n";
+            std::cout << "  - Completed Trips:       " << g_completed << "\n";
+            std::cout << "  - Vehicle Conservation:  " << (conserved ? "VERIFIED (100% Conserved)" : "MISMATCH") << "\n";
+            std::cout << "  - Max Rank Time:         " << metrics.max_rank_time_ms << " ms\n";
+            std::cout << "  - Avg Rank Time:         " << metrics.avg_rank_time_ms << " ms\n";
+            std::cout << "  - Load Imbalance (\xce\xbb):    " << std::setprecision(3)
+                      << metrics.load_imbalance_ratio << " (t_max / t_avg)\n";
+            std::cout << "  - Comm-to-Compute Ratio: " << std::setprecision(3)
+                      << metrics.comm_to_compute_ratio << " (R_comm)\n";
+            std::cout << "  - MPI Waitall Latency:   " << std::fixed << std::setprecision(2)
+                      << metrics.comm_wait_time_ms << " ms\n";
+            std::cout << "  - Average Step Latency:  " << metrics.avg_step_time_us << " us/step\n";
+            std::cout << "  - Cell Update Rate:      " << std::scientific << std::setprecision(3)
+                      << metrics.updates_per_second << " cell updates/sec\n";
+            std::cout << "  - Average Network Speed: " << std::fixed << std::setprecision(2)
+                      << metrics.avg_network_speed << " cells/s ("
+                      << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
+
+            if (config.dev_mode) {
+                if (metrics.total_sim_time_ms < 1000.0) {
+                    std::cout << "\n[PASS] Hybrid developer mode SLA satisfied: "
+                              << metrics.total_sim_time_ms << " ms < 1000 ms (< 1.0s)\n";
+                } else {
+                    std::cout << "\n[INFO] Developer mode execution runtime: "
+                              << metrics.total_sim_time_ms << " ms\n";
+                }
+            }
+            std::cout << "========================================================\n";
+        }
+
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        MPI_Finalize();
+#endif
+        return 0;
+    }
+
 
     if (use_mpi) {
         karachiflow::MPIEngine mpi_sim;
