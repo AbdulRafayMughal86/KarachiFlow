@@ -363,11 +363,12 @@ class TestDashboardStreamlitApp(unittest.TestCase):
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(at.session_state.active_step, 0)
 
+        available_steps = sorted([int(os.path.basename(f).replace("snapshot_t", "").replace(".csv", "")) for f in glob.glob("data/snapshots/snapshot_t*.csv")])
         btn_dict = {btn.label: btn for btn in at.button}
-        if "Next ▶" in btn_dict:
+        if "Next ▶" in btn_dict and len(available_steps) > 1:
             btn_dict["Next ▶"].click().run(timeout=30)
             self.assertEqual(len(at.exception), 0)
-            self.assertEqual(at.session_state.active_step, 10)
+            self.assertEqual(at.session_state.active_step, available_steps[1])
 
         btn_dict = {btn.label: btn for btn in at.button}
         if "◀ Prev" in btn_dict:
@@ -376,10 +377,9 @@ class TestDashboardStreamlitApp(unittest.TestCase):
             self.assertEqual(at.session_state.active_step, 0)
 
         btn_dict = {btn.label: btn for btn in at.button}
-        if "Latest ⏭" in btn_dict:
+        if "Latest ⏭" in btn_dict and available_steps:
             btn_dict["Latest ⏭"].click().run(timeout=30)
             self.assertEqual(len(at.exception), 0)
-            available_steps = [int(os.path.basename(f).replace("snapshot_t", "").replace(".csv", "")) for f in glob.glob("data/snapshots/snapshot_t*.csv")]
             self.assertEqual(at.session_state.active_step, max(available_steps))
 
     def test_streamlit_live_monitor_mode(self):
