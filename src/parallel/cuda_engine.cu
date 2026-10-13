@@ -140,10 +140,16 @@ __global__ void evaluate_intent_kernel(
             }
 
             size_t next_offset = d_seg_cell_offset[next_seg_id];
-            size_t next_g0 = next_offset + static_cast<size_t>(next_lane) * next_cpl;
-            if (d_current_cells[next_g0] >= 0) {
-                speed = (speed < d_seg) ? speed : d_seg;
+            int cells_into_next = speed - (d_seg + 1);
+            for (int c_n = 0; c_n <= cells_into_next; ++c_n) {
+                size_t next_g = next_offset + static_cast<size_t>(next_lane) * next_cpl + c_n;
+                if (d_current_cells[next_g] >= 0) {
+                    speed = (c_n == 0) ? d_seg : (d_seg + 1) + (c_n - 1);
+                    break;
+                }
             }
+        } else if (!trip_completed && next_seg_id < 0) {
+            trip_completed = true;
         }
     }
 
@@ -491,37 +497,46 @@ void CudaEngine::inject_demand() {
 
     const uint32_t remaining = m_max_vehicles - m_injected_vehicles;
     const uint32_t steps_left = std::max(1u, m_config.total_steps - m_current_step);
-    const uint32_t to_inject = std::min(remaining, std::max(1u, remaining / steps_left + 1u));
+    const uint32_t to_inject = std::min(remaining, std::max(1u, (remaining + steps_left - 1) / steps_left));
+    const size_t num_candidates = m_origin_candidate_segments.size();
+    if (num_candidates == 0) return;
 
-    for (uint32_t k = 0; k < to_inject; ++k) {
-        if (m_injected_vehicles >= m_max_vehicles) break;
+    for (uint32_t k = 0; k < to_inject && m_injected_vehicles < m_max_vehicles; ++k) {
         uint32_t veh_id = m_injected_vehicles;
-
-        const size_t orig_idx = (veh_id * 17u + m_current_step) % m_origin_candidate_segments.size();
-        const int32_t seg_id = m_origin_candidate_segments[orig_idx];
-        const auto& seg = m_segments[seg_id];
+        const size_t base_cand_idx = (static_cast<size_t>(veh_id) * 37u + m_current_step * 17u) % num_candidates;
 
         bool placed = false;
-        for (int16_t l = 0; l < seg.lanes(); ++l) {
-            size_t g_idx = seg.local_to_global_cell(l, 0);
-            if (m_h_current_cells[g_idx] == EMPTY_CELL) {
-                auto& v = m_vehicles[veh_id];
-                v.segment_id = seg_id;
-                v.lane = l;
-                v.cell_idx = 0;
-                v.velocity = 1;
-                v.active = true;
-                v.cells_traveled = 0;
-                v.steps_traveled = 0;
+        for (size_t attempt = 0; attempt < 32 && !placed; ++attempt) {
+            const size_t cand_idx = (base_cand_idx + attempt * 7919u) % num_candidates;
+            const int32_t seg_id = m_origin_candidate_segments[cand_idx];
+            const auto& seg = m_segments[seg_id];
 
-                m_h_current_cells[g_idx] = static_cast<int32_t>(veh_id);
-                m_injected_vehicles++;
-                m_active_vehicle_count++;
-                placed = true;
-                break;
+            for (int16_t l = 0; l < seg.lanes(); ++l) {
+                size_t g_idx = seg.local_to_global_cell(l, 0);
+                if (m_h_current_cells[g_idx] == EMPTY_CELL) {
+                    auto& v = m_vehicles[veh_id];
+                    v.id = static_cast<int32_t>(veh_id);
+                    v.segment_id = seg_id;
+                    v.lane = l;
+                    v.cell_idx = 0;
+                    v.velocity = 0;
+                    v.max_velocity = static_cast<uint8_t>(seg.speed_limit());
+                    v.active = true;
+                    v.cells_traveled = 0;
+                    v.steps_traveled = 0;
+                    v.dest_zone = static_cast<int32_t>(veh_id % std::max(1u, m_dest_zone_count));
+
+                    m_h_current_cells[g_idx] = static_cast<int32_t>(veh_id);
+                    m_injected_vehicles++;
+                    m_active_vehicle_count++;
+                    placed = true;
+                    break;
+                }
             }
         }
-        if (!placed) break;
+        if (!placed) {
+            continue;
+        }
     }
 }
 
@@ -637,10 +652,16 @@ void CudaEngine::step() {
                 if (speed - (d_seg + 1) > max_into_next) {
                     speed = (d_seg + 1) + max_into_next;
                 }
-                size_t next_g0 = next_seg.local_to_global_cell(next_lane, 0);
-                if (m_h_current_cells[next_g0] != EMPTY_CELL) {
-                    speed = std::min(speed, d_seg);
+                const int cells_into_next = speed - (d_seg + 1);
+                for (int c_n = 0; c_n <= cells_into_next; ++c_n) {
+                    size_t next_g = next_seg.local_to_global_cell(next_lane, static_cast<int16_t>(c_n));
+                    if (m_h_current_cells[next_g] != EMPTY_CELL) {
+                        speed = (c_n == 0) ? d_seg : (d_seg + 1) + (c_n - 1);
+                        break;
+                    }
                 }
+            } else if (!trip_completed && next_seg_id < 0) {
+                trip_completed = true;
             }
         }
 

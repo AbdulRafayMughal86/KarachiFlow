@@ -19,20 +19,26 @@ void check_condition(bool condition, const std::string& msg) {
 
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    uint32_t num_cars = 50000;
+    if (argc > 1) {
+        num_cars = static_cast<uint32_t>(std::stoul(argv[1]));
+    }
+
     std::cout << "========================================================\n";
     std::cout << " KarachiFlow — GPU Acceleration & Collision Validation  \n";
     std::cout << " Target Architecture: NVIDIA RTX 4000 Ada (sm_89) / SoA\n";
+    std::cout << " Sample Size:         " << num_cars << " vehicles\n";
     std::cout << "========================================================\n\n";
 
     karachiflow::SimulationConfig config;
     config.network_path = "data/karachi_network.bin";
     config.metadata_path = "data/karachi_network_metadata.json";
     config.snapshot_interval = 0;
-    config.target_vehicles = 5000;
+    config.target_vehicles = num_cars;
     config.total_steps = 60;
     config.p_slow = 0.2f;
-    config.dev_mode = true;
+    config.dev_mode = false;
 
     // -----------------------------------------------------------------
     // Test 1: Single-Threaded Sequential CPU Baseline Reference
