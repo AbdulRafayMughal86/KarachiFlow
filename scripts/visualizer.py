@@ -491,3 +491,7 @@ def build_traffic_deck(
         tooltip=tooltip,
     )
     return deck
+
+
+# Backward compatibility alias
+build_deck = build_traffic_deck

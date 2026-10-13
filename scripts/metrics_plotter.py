@@ -1120,3 +1120,7 @@ def create_scaling_summary_table(benchmarks: Dict[str, Any]) -> pd.DataFrame:
         })
 
     return pd.DataFrame(rows)
+
+
+# Backward compatibility alias
+plot_communication_overhead = plot_mpi_communication_overhead
