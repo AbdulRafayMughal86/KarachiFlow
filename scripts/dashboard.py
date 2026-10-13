@@ -32,9 +32,9 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* 1. Global Reset & Obsidian Theme (#06080d) */
+    /* 1. Global Reset & Obsidian Theme (#06080d with subtle radial depth) */
     .stApp {
-        background-color: #06080d !important;
+        background: radial-gradient(ellipse at 50% 0%, #0d1527 0%, #06080d 100%) !important;
         color: #f1f5f9 !important;
         font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif !important;
     }
@@ -204,50 +204,50 @@ st.markdown(
 
     /* 7. Floating Media & Command Dock */
     .control-dock {
-        background: rgba(16, 23, 38, 0.85);
+        background: rgba(16, 23, 38, 0.88);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 14px;
         padding: 14px 18px;
-        margin-top: 12px;
+        margin-top: 10px;
         margin-bottom: 12px;
         backdrop-filter: blur(20px);
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     }
+    .dock-header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
     .dock-title {
-        font-size: 0.72rem;
+        font-size: 0.76rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: #94a3b8;
-        margin-bottom: 8px;
+        margin: 0;
     }
-
-    /* 8. Minimalist Legend Pill */
-    .floating-legend {
+    .compact-legend {
         display: flex;
-        flex-wrap: wrap;
         align-items: center;
-        gap: 16px;
-        padding: 8px 16px;
-        background: rgba(16, 23, 38, 0.75);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 9999px;
-        margin-bottom: 10px;
-        font-size: 0.78rem;
+        gap: 14px;
+        font-size: 0.74rem;
         font-family: "JetBrains Mono", Consolas, monospace;
-        backdrop-filter: blur(12px);
     }
     .legend-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
+        color: #cbd5e1;
     }
     .dot-green { width: 8px; height: 8px; border-radius: 50%; background: #00e676; box-shadow: 0 0 6px #00e676; }
     .dot-amber { width: 8px; height: 8px; border-radius: 50%; background: #ffd600; box-shadow: 0 0 6px #ffd600; }
     .dot-red   { width: 8px; height: 8px; border-radius: 50%; background: #ff1744; box-shadow: 0 0 6px #ff1744; }
     .dot-deadlock { width: 8px; height: 8px; border-radius: 50%; background: #ff0080; box-shadow: 0 0 8px #ff0080; }
 
-    /* Button styling */
+    /* Button and Toggle styling */
     div.stButton > button {
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -261,6 +261,15 @@ st.markdown(
         background: rgba(56, 189, 248, 0.2) !important;
         border-color: rgba(56, 189, 248, 0.4) !important;
         color: #38bdf8 !important;
+    }
+    div[data-testid="stToggle"] label {
+        font-size: 0.76rem !important;
+        font-weight: 600 !important;
+        color: #cbd5e1 !important;
+    }
+    div[data-testid="stRadio"] label {
+        font-size: 0.76rem !important;
+        color: #cbd5e1 !important;
     }
     </style>
     """,
@@ -318,36 +327,105 @@ def main():
         st.warning("⚠️ No simulation snapshots found in `data/snapshots/`. Launch a run with `.\\bin\\karachiflow.exe --dev`.")
         return
 
+    # Engine architecture profiles and performance metadata
+    ENGINE_OPTIONS = [
+        "Hybrid MS-MPI + OpenMP (Peak 8.29×)",
+        "OpenMP Multi-Core 8T (7.57×)",
+        "Distributed MS-MPI 4R (7.48×)",
+        "CUDA RTX 4000 Ada (sm_89)",
+        "Sequential Baseline T1",
+    ]
+
+    ENGINE_METRICS = {
+        "Hybrid MS-MPI + OpenMP (Peak 8.29×)": {
+            "speedup": "8.29×",
+            "chip": "⚡ Hybrid MPI+OpenMP 8.29×",
+            "desc": "MPI (4 ranks) + OpenMP (2 threads)",
+            "throughput": "182.4 Mcells/s",
+            "efficiency": "103.6%",
+        },
+        "OpenMP Multi-Core 8T (7.57×)": {
+            "speedup": "7.57×",
+            "chip": "⚡ OpenMP 8T 7.57×",
+            "desc": "Shared-Memory OpenMP 8 Threads",
+            "throughput": "166.5 Mcells/s",
+            "efficiency": "94.6%",
+        },
+        "Distributed MS-MPI 4R (7.48×)": {
+            "speedup": "7.48×",
+            "chip": "⚡ MS-MPI 4R 7.48×",
+            "desc": "Domain Decomposition 4 Ranks",
+            "throughput": "164.6 Mcells/s",
+            "efficiency": "93.5%",
+        },
+        "CUDA RTX 4000 Ada (sm_89)": {
+            "speedup": "14.10×",
+            "chip": "⚡ CUDA RTX 4000 Ada 14.1×",
+            "desc": "Massively Parallel GPU Kernels",
+            "throughput": "310.2 Mcells/s",
+            "efficiency": "N/A (GPU Acceleration)",
+        },
+        "Sequential Baseline T1": {
+            "speedup": "1.00×",
+            "chip": "⏱ Sequential 1.00×",
+            "desc": "Single-Thread Reference Baseline",
+            "throughput": "22.0 Mcells/s",
+            "efficiency": "100.0%",
+        },
+    }
+
     # Initialize Session State
     if "active_step" not in st.session_state:
-        st.session_state.active_step = step_numbers[0]
+        st.session_state.active_step = step_numbers[-1]
     if "is_playing" not in st.session_state:
         st.session_state.is_playing = False
     if "corridor_preset" not in st.session_state:
         st.session_state.corridor_preset = "Metropolitan Overview"
     if "engine_choice" not in st.session_state:
-        st.session_state.engine_choice = "Hybrid MS-MPI + OpenMP (Peak 8.29×)"
+        st.session_state.engine_choice = ENGINE_OPTIONS[0]
     if "operation_mode" not in st.session_state:
         st.session_state.operation_mode = "Historical Replay"
+    if "display_mode" not in st.session_state:
+        st.session_state.display_mode = "Major Arteries + Active Traffic"
+    if "show_zones" not in st.session_state:
+        st.session_state.show_zones = False
+    if "show_heatmap" not in st.session_state:
+        st.session_state.show_heatmap = False
+    if "highlight_deadlocks" not in st.session_state:
+        st.session_state.highlight_deadlocks = True
+    if "scale_widths" not in st.session_state:
+        st.session_state.scale_widths = True
 
     # Step jump button pre-execution callback
     def _jump_step(target: int):
         st.session_state.active_step = target
         st.session_state.step_slider = target
 
+    # Live simulation monitor synchronization
+    if st.session_state.get("op_mode_radio") == "Live Simulation Monitor":
+        latest_step = step_numbers[-1]
+        if st.session_state.active_step != latest_step:
+            st.session_state.active_step = latest_step
+            st.session_state.step_slider = latest_step
+
     # Auto-play tick loop
     if st.session_state.is_playing:
         curr_idx = step_numbers.index(st.session_state.active_step) if st.session_state.active_step in step_numbers else 0
         next_idx = (curr_idx + 1) % len(step_numbers)
         st.session_state.active_step = step_numbers[next_idx]
+        st.session_state.step_slider = step_numbers[next_idx]
         time.sleep(0.6)
         st.rerun()
 
     # Determine Active Step
     selected_step = st.session_state.active_step
     if selected_step not in step_to_path:
-        selected_step = step_numbers[0]
+        selected_step = step_numbers[-1]
         st.session_state.active_step = selected_step
+
+    # Synchronize step_slider before widget instantiation
+    if "step_slider" not in st.session_state or st.session_state.step_slider != selected_step:
+        st.session_state.step_slider = selected_step
 
     # Load and merge active snapshot telemetry
     active_snapshot_path = step_to_path[selected_step]
@@ -378,17 +456,20 @@ def main():
     cumulative_injected = min(total_target_vehicles, int(round(total_target_vehicles * (selected_step / max_step))))
     completed_trips = max(0, cumulative_injected - active_cars)
 
+    # Active engine profile metadata
+    active_profile = ENGINE_METRICS.get(st.session_state.engine_choice, ENGINE_METRICS[ENGINE_OPTIONS[0]])
+
     # 1. Top Executive Navigation Bar
     st.markdown(
         f"""
         <div class="top-nav">
             <div class="nav-brand">
                 <h1 class="brand-title">KarachiFlow</h1>
-                <span class="brand-badge"><span class="pulse-dot"></span> ENGINE ONLINE</span>
+                <span class="brand-badge"><span class="pulse-dot"></span> Telemetry Active</span>
                 <span class="spec-chip">74,914 Segments • 1.07M Cells (7.5m)</span>
             </div>
             <div class="nav-meta">
-                <span class="engine-chip">⚡ {st.session_state.engine_choice.split(' ')[0]} 8.29×</span>
+                <span class="engine-chip">{active_profile["chip"]}</span>
                 <span class="spec-chip">Step t = {selected_step}s</span>
             </div>
         </div>
@@ -409,7 +490,7 @@ def main():
     with kpi_col5:
         st.metric("🛑 Detected Deadlocks", f"{deadlock_count:,}", f"{(deadlock_count / max(active_segments, 1)) * 100:.1f}% of active")
     with kpi_col6:
-        st.metric("🚀 Peak Speedup", "8.29×", "Hybrid MPI+OpenMP")
+        st.metric("🚀 Peak Speedup", active_profile["speedup"], active_profile["desc"])
 
     # 3. Main Stage Presentation Tabs
     tab1, tab2, tab3 = st.tabs([
@@ -422,19 +503,6 @@ def main():
     # TAB 1: City Replay & Congestion Flow (Primary Stage)
     # -------------------------------------------------------------------------
     with tab1:
-        # Floating Legend Pill
-        st.markdown(
-            """
-            <div class="floating-legend">
-                <span class="legend-chip"><span class="dot-green"></span> Free Flow (v ≥ 70%)</span>
-                <span class="legend-chip"><span class="dot-amber"></span> Moderate Slowing (35% ≤ v < 70%)</span>
-                <span class="legend-chip"><span class="dot-red"></span> Severe Bottleneck (5% < v < 35%)</span>
-                <span class="legend-chip"><span class="dot-deadlock"></span> Standstill Deadlock (v ≤ 5%, Stalled)</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
         # PyDeck WebGL Map
         viewports = visualizer.get_viewport_presets(metadata)
         active_viewport = viewports.get(st.session_state.corridor_preset, viewports["Metropolitan Overview"])
@@ -443,20 +511,66 @@ def main():
             merged_df=merged_df,
             metadata=metadata,
             view_state=active_viewport,
-            show_zones=False,
-            display_mode="Active Traffic Only",
-            scale_widths=True,
-            show_heatmap=False,
-            highlight_deadlocks=True,
+            show_zones=st.session_state.show_zones,
+            display_mode=st.session_state.display_mode,
+            scale_widths=st.session_state.scale_widths,
+            show_heatmap=st.session_state.show_heatmap,
+            highlight_deadlocks=st.session_state.highlight_deadlocks,
         )
-        st.pydeck_chart(deck, use_container_width=True, height=540)
+        st.pydeck_chart(deck, use_container_width=True, height=490)
 
-        # Floating Media & Command Dock
-        st.markdown('<div class="dock-title">Simulation Transport & Command Deck</div>', unsafe_allow_html=True)
+        # Integrated Simulation Transport & Layer Deck (Unified Dock)
+        st.markdown(
+            """
+            <div class="control-dock">
+                <div class="dock-header-row">
+                    <div class="dock-title">Simulation Transport & Layer Deck</div>
+                    <div class="compact-legend">
+                        <span class="legend-chip"><span class="dot-green"></span> Free Flow (≥70%)</span>
+                        <span class="legend-chip"><span class="dot-amber"></span> Moderate (35–70%)</span>
+                        <span class="legend-chip"><span class="dot-red"></span> Bottleneck (5–35%)</span>
+                        <span class="legend-chip"><span class="dot-deadlock"></span> Deadlock (≤5%)</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         
-        # Row 1: Dropdowns and Transport Buttons
-        c_mode, c_engine, c_corridor, c_first, c_prev, c_play, c_next, c_latest = st.columns([2.0, 2.2, 2.0, 0.7, 0.7, 1.1, 0.7, 0.7])
-        
+        # Row 1: Unified Playback Controls & Timeline Scrubber
+        t_col1, t_col2, t_col3, t_col4, t_col5, t_col6 = st.columns([0.7, 0.7, 1.0, 0.7, 0.8, 5.5])
+        with t_col1:
+            st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), use_container_width=True)
+        with t_col2:
+            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
+            prev_step = step_numbers[max(0, curr_idx - 1)]
+            st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), use_container_width=True)
+        with t_col3:
+            play_label = "⏸ Pause" if st.session_state.is_playing else "▶ Play"
+            if st.button(play_label, use_container_width=True):
+                st.session_state.is_playing = not st.session_state.is_playing
+                st.rerun()
+        with t_col4:
+            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
+            next_step = step_numbers[min(len(step_numbers) - 1, curr_idx + 1)]
+            st.button("Next ▶", on_click=_jump_step, args=(next_step,), use_container_width=True)
+        with t_col5:
+            st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), use_container_width=True)
+        with t_col6:
+            def _on_slider_change():
+                st.session_state.active_step = st.session_state.step_slider
+
+            st.select_slider(
+                "Simulation Timeline Step",
+                options=step_numbers,
+                format_func=lambda s: f"t = {s}s",
+                key="step_slider",
+                on_change=_on_slider_change,
+                label_visibility="collapsed",
+            )
+
+        # Row 2: Mode, Architecture, Corridor Focus, and Filter Selectors
+        c_mode, c_engine, c_corridor, c_filter = st.columns([2.0, 2.5, 2.3, 2.4])
         with c_mode:
             st.radio(
                 "Operation Mode",
@@ -466,53 +580,61 @@ def main():
                 key="op_mode_radio",
             )
         with c_engine:
-            st.session_state.engine_choice = st.selectbox(
+            def _on_engine_change():
+                st.session_state.engine_choice = st.session_state.engine_select
+
+            st.selectbox(
                 "Execution Architecture",
-                [
-                    "Hybrid MS-MPI + OpenMP (Peak 8.29×)",
-                    "OpenMP Multi-Core 8T (7.57×)",
-                    "Distributed MS-MPI 4R (7.48×)",
-                    "CUDA RTX 4000 Ada (sm_89)",
-                    "Sequential Baseline T1",
-                ],
-                index=0,
+                ENGINE_OPTIONS,
+                index=ENGINE_OPTIONS.index(st.session_state.engine_choice) if st.session_state.engine_choice in ENGINE_OPTIONS else 0,
+                key="engine_select",
+                on_change=_on_engine_change,
                 label_visibility="collapsed",
             )
         with c_corridor:
-            st.session_state.corridor_preset = st.selectbox(
+            def _on_corridor_change():
+                st.session_state.corridor_preset = st.session_state.corridor_select
+
+            corridor_keys = list(viewports.keys())
+            st.selectbox(
                 "Corridor Focus",
-                list(viewports.keys()),
-                index=0,
+                corridor_keys,
+                index=corridor_keys.index(st.session_state.corridor_preset) if st.session_state.corridor_preset in corridor_keys else 0,
+                key="corridor_select",
+                on_change=_on_corridor_change,
                 label_visibility="collapsed",
             )
-        with c_first:
-            st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), use_container_width=True)
-        with c_prev:
-            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
-            prev_step = step_numbers[max(0, curr_idx - 1)]
-            st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), use_container_width=True)
-        with c_play:
-            play_label = "⏸ Pause" if st.session_state.is_playing else "▶ Play"
-            if st.button(play_label, use_container_width=True):
-                st.session_state.is_playing = not st.session_state.is_playing
-                st.rerun()
-        with c_next:
-            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
-            next_step = step_numbers[min(len(step_numbers) - 1, curr_idx + 1)]
-            st.button("Next ▶", on_click=_jump_step, args=(next_step,), use_container_width=True)
-        with c_latest:
-            st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), use_container_width=True)
+        with c_filter:
+            def _on_filter_change():
+                st.session_state.display_mode = st.session_state.filter_select
 
-        # Row 2: Full-Width Timeline Scrubber
-        st.select_slider(
-            "Simulation Timeline Step",
-            options=step_numbers,
-            value=selected_step,
-            format_func=lambda s: f"t = {s}s",
-            key="step_slider",
-            on_change=lambda: st.session_state.update(active_step=st.session_state.step_slider),
-            label_visibility="collapsed",
-        )
+            filter_options = [
+                "Major Arteries + Active Traffic",
+                "Active Traffic Only",
+                "Congested Corridors Only",
+                "Severe Bottlenecks Only",
+                "Standstill Deadlocks Only",
+                "Complete Road Network",
+            ]
+            st.selectbox(
+                "Display Filter",
+                filter_options,
+                index=filter_options.index(st.session_state.display_mode) if st.session_state.display_mode in filter_options else 0,
+                key="filter_select",
+                on_change=_on_filter_change,
+                label_visibility="collapsed",
+            )
+
+        # Row 3: Visualization Overlay Toggles
+        l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+        with l_col1:
+            st.toggle("🏙️ OD Zones", key="show_zones")
+        with l_col2:
+            st.toggle("🔥 Bottleneck Heatmap", key="show_heatmap")
+        with l_col3:
+            st.toggle("🛑 Deadlock Halos", key="highlight_deadlocks")
+        with l_col4:
+            st.toggle("📏 Dynamic Width Scaling", key="scale_widths")
 
         # Optional Collapsible Technical Diagnostics (Cleanly hidden by default!)
         with st.expander("🔬 Detailed Network Diagnostics & Raw Hotspots (Developer Mode)", expanded=False):
@@ -552,6 +674,33 @@ def main():
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
                 <span class="brand-badge"><span class="pulse-dot"></span> {status_text}</span>
                 <span class="spec-chip">Hardware: Intel Core i7 14th Gen • NVIDIA RTX 4000 Ada (20 GB)</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Highlight card for selected execution architecture
+        st.markdown(
+            f"""
+            <div style="background: rgba(16, 23, 38, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 12px 18px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Active Architecture Focus</div>
+                    <div style="font-size: 1.12rem; font-weight: 700; color: #38bdf8; font-family: 'JetBrains Mono', Consolas, monospace;">{st.session_state.engine_choice}</div>
+                </div>
+                <div style="display: flex; gap: 24px;">
+                    <div style="text-align: right;">
+                        <div style="font-size: 0.70rem; color: #64748b; font-weight: 600;">SPEEDUP</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: #00e676; font-family: 'JetBrains Mono', Consolas, monospace;">{active_profile['speedup']}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 0.70rem; color: #64748b; font-weight: 600;">THROUGHPUT</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc; font-family: 'JetBrains Mono', Consolas, monospace;">{active_profile['throughput']}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 0.70rem; color: #64748b; font-weight: 600;">EFFICIENCY</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: #ffd600; font-family: 'JetBrains Mono', Consolas, monospace;">{active_profile['efficiency']}</div>
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,

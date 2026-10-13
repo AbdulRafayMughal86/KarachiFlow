@@ -132,6 +132,7 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     # Derived physics indicators
     merged["avg_speed_kmh"] = (merged["avg_speed"] * KMH_PER_CELL_PER_SEC).round(1)
     merged["density_pct"] = (merged["density_ratio"] * 100.0).round(1)
+    merged["length_meters"] = merged["length_meters"].round(1)
 
     v_max = np.maximum(merged["speed_limit"].values, 1)
     speed_ratio = np.clip(merged["avg_speed"].values / v_max, 0.0, 1.0)
@@ -324,7 +325,7 @@ def build_traffic_deck(
     merged_df: pd.DataFrame,
     metadata: Dict[str, Any],
     view_state: pdk.ViewState,
-    display_mode: str = "Active Traffic Only",
+    display_mode: str = "Major Arteries + Active Traffic",
     show_zones: bool = False,
     show_heatmap: bool = False,
     highlight_deadlocks: bool = True,
@@ -460,27 +461,28 @@ def build_traffic_deck(
             )
             layers.append(heatmap_layer)
 
-    # Tooltip configuration for interactive segment inspection
+    # Tooltip configuration for interactive segment inspection (Compact HUD)
     tooltip = {
         "html": """
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; font-size: 12px; line-height: 1.5; color: #f8fafc; background: #101726; padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 24px rgba(0,0,0,0.6); backdrop-filter: blur(8px);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px;">
-                <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 700; font-size: 13px; color: #38bdf8;">SEGMENT #{segment_id}</span>
-                <span style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); color: #cbd5e1;">Lanes: {lanes}</span>
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; font-size: 11px; line-height: 1.4; color: #f8fafc; background: rgba(16, 23, 38, 0.94); padding: 7px 11px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 16px rgba(0,0,0,0.5); backdrop-filter: blur(8px); max-width: 230px; pointer-events: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px;">
+                <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 700; font-size: 11px; color: #38bdf8;">SEG #{segment_id}</span>
+                <span style="font-size: 10px; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.08); color: #cbd5e1;">Lanes: {lanes}</span>
             </div>
-            <div style="margin-bottom: 3px;"><b>Status:</b> {congestion_status}</div>
-            <div style="margin-bottom: 3px;"><b>Active Cars:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #4ade80; font-weight: 600;">{vehicle_count}</span></div>
-            <div style="margin-bottom: 3px;"><b>Average Speed:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #f8fafc; font-weight: 600;">{avg_speed_kmh} km/h</span> <span style="color: #94a3b8; font-size: 11px;">({avg_speed} cells/s)</span></div>
-            <div style="margin-bottom: 4px;"><b>Density Ratio:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 600;">{density_pct}%</span></div>
-            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 4px; color: #94a3b8; font-size: 11px; display: flex; justify-content: space-between;">
-                <span>Length: {length_meters}m</span>
-                <span>Speed Limit: {speed_limit_kmh} km/h</span>
+            <div style="margin-bottom: 2px;"><b>Status:</b> {congestion_status}</div>
+            <div style="margin-bottom: 2px;"><b>Traffic:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #4ade80;">{vehicle_count} veh</span> • <span style="font-family: 'JetBrains Mono', Consolas, monospace;">{avg_speed_kmh} km/h</span></div>
+            <div style="margin-bottom: 2px;"><b>Density:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace;">{density_pct}%</span></div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; color: #94a3b8; font-size: 10px; display: flex; justify-content: space-between;">
+                <span>Len: {length_meters}m</span>
+                <span>Limit: {speed_limit_kmh} km/h</span>
             </div>
         </div>
         """,
         "style": {
             "backgroundColor": "transparent",
             "border": "none",
+            "transform": "translate(12px, 12px)",
+            "zIndex": "99999",
         }
     }
 
