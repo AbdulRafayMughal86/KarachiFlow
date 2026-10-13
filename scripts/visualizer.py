@@ -24,9 +24,10 @@ SEGMENT_STRUCT_BYTES = 28 # int32 id, int32 from, int32 to, int16 lanes, int16 c
 KMH_PER_CELL_PER_SEC = 27.0
 
 # Congestion color palette (RGBA) — High-contrast neon tones on dark basemap
-COLOR_FREE_FLOW = [0, 230, 118, 245]       # Vibrant Neon Green: v >= 0.75 vmax, low density
-COLOR_MODERATE = [255, 214, 0, 245]        # Bright Amber Yellow: 0.4 vmax <= v < 0.75 vmax
-COLOR_BOTTLENECK = [255, 23, 68, 255]      # Vivid Glowing Crimson Red: v < 0.4 vmax or density >= 0.5
+COLOR_FREE_FLOW = [0, 230, 118, 245]       # Vibrant Neon Green: v >= 0.70 vmax, density < 0.25
+COLOR_MODERATE = [255, 214, 0, 245]        # Bright Amber Yellow: 0.35 vmax <= v < 0.70 vmax or 0.25 <= density < 0.45
+COLOR_BOTTLENECK = [255, 23, 68, 255]      # Vivid Glowing Crimson Red: 0.05 vmax < v < 0.35 vmax or 0.45 <= density < 0.65
+COLOR_DEADLOCK = [255, 0, 128, 255]        # Vivid Electric Magenta/Ruby: Standstill Gridlock / Deadlock (v <= 0.05, n >= 2, rho >= 0.65)
 COLOR_INACTIVE = [50, 60, 80, 50]          # Faint subtle slate: No active vehicles
 
 # Zone boundary colors (RGBA) — Thin crisp outlines without blocking fills
@@ -137,40 +138,60 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     density = merged["density_ratio"].values
     cars = merged["vehicle_count"].values
 
-    # Congestion status assignment
-    # Red: severe bottleneck (queue formation, density >= 0.4 with cars, or speed < 0.4 vmax)
-    is_bottleneck = (cars > 0) & ((density >= 0.4) | (speed_ratio < 0.4))
-    # Yellow: moderate slowing (speed < 0.75 vmax or density >= 0.2)
-    is_moderate = (cars > 0) & (~is_bottleneck) & ((density >= 0.2) | (speed_ratio < 0.75))
-    # Green: free flow
-    is_free_flow = (cars > 0) & (~is_bottleneck) & (~is_moderate)
+    # 4-Tier Traffic Physics & Deadlock Detection:
+    # 1. STANDSTILL GRIDLOCK / DEADLOCK (Magenta):
+    #    speed <= 0.05 vmax AND vehicle_count >= 2 AND density >= 0.65
+    is_gridlock = (cars >= 2) & (density >= 0.65) & (speed_ratio <= 0.05)
+
+    # 2. Severe Bottleneck / Queue (Crimson Red):
+    #    (0.05 vmax < speed < 0.35 vmax) OR (0.45 <= density < 0.65) OR residual low-speed/high-density
+    is_bottleneck = (cars > 0) & (~is_gridlock) & (
+        ((speed_ratio > 0.05) & (speed_ratio < 0.35)) |
+        ((density >= 0.45) & (density < 0.65)) |
+        (speed_ratio <= 0.05) |
+        (density >= 0.65)
+    )
+
+    # 3. Moderate Slowing (Bright Amber):
+    #    (0.35 vmax <= speed < 0.70 vmax) OR (0.25 <= density < 0.45)
+    is_moderate = (cars > 0) & (~is_gridlock) & (~is_bottleneck) & (
+        ((speed_ratio >= 0.35) & (speed_ratio < 0.70)) |
+        ((density >= 0.25) & (density < 0.45))
+    )
+
+    # 4. Free Flow (Neon Green):
+    #    speed >= 0.70 vmax AND density < 0.25
+    is_free_flow = (cars > 0) & (~is_gridlock) & (~is_bottleneck) & (~is_moderate)
 
     status_list = np.full(len(merged), "Empty Road", dtype=object)
     status_list[is_free_flow] = "Free Flow (Normal)"
     status_list[is_moderate] = "Moderate Flow (Slowing)"
     status_list[is_bottleneck] = "Severe Bottleneck (Queue)"
+    status_list[is_gridlock] = "Standstill Gridlock (Deadlock)"
     merged["congestion_status"] = status_list
 
-    # Assign RGBA color tuples as Python lists (critical for PyDeck JSON serialization)
+    # Assign RGBA color tuples as Python lists (strictly serialized via .tolist() for PyDeck JSON)
     colors = np.empty((len(merged), 4), dtype=np.int32)
     colors[:] = COLOR_INACTIVE
     colors[is_free_flow] = COLOR_FREE_FLOW
     colors[is_moderate] = COLOR_MODERATE
     colors[is_bottleneck] = COLOR_BOTTLENECK
+    colors[is_gridlock] = COLOR_DEADLOCK
     merged["color"] = colors.tolist()
 
     # Sleek line widths: sharp and crisp to prevent black blobs on high density
     lanes = merged["lanes"].values
     widths = np.full(len(merged), 1.0, dtype=np.float32)
     active_mask = cars > 0
-    widths[active_mask] = np.clip(1.5 + lanes[active_mask] * 0.4 + density[active_mask] * 1.5, 1.8, 3.8)
+    widths[active_mask] = np.clip(1.5 + lanes[active_mask] * 0.35 + density[active_mask] * 2.0, 1.8, 4.0)
+    widths[is_gridlock] = np.clip(widths[is_gridlock] + 1.2, 2.8, 5.0)
     merged["line_width"] = widths
 
     return merged
 
 
 def get_viewport_presets(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, pdk.ViewState]:
-    """Provides curated geographic camera viewpoints across Karachi."""
+    """Provides curated geographic camera viewpoints across Karachi key corridors."""
     bbox = metadata.get("bounding_box", {}) if metadata else {}
     min_lat = bbox.get("min_lat", 24.840)
     max_lat = bbox.get("max_lat", 24.935)
@@ -191,29 +212,58 @@ def get_viewport_presets(metadata: Optional[Dict[str, Any]] = None) -> Dict[str,
         "Shahrah-e-Faisal Expressway": pdk.ViewState(
             latitude=24.868,
             longitude=67.082,
-            zoom=13.5,
-            pitch=15,
+            zoom=13.6,
+            pitch=25,
             bearing=-25,
+        ),
+        "Saddar Commercial Core": pdk.ViewState(
+            latitude=24.854,
+            longitude=67.016,
+            zoom=14.2,
+            pitch=20,
+            bearing=10,
         ),
         "University Road Arterial": pdk.ViewState(
             latitude=24.925,
             longitude=67.112,
-            zoom=13.5,
-            pitch=15,
+            zoom=13.6,
+            pitch=20,
             bearing=20,
         ),
+        "Clifton Marine Drive": pdk.ViewState(
+            latitude=24.818,
+            longitude=67.032,
+            zoom=14.0,
+            pitch=20,
+            bearing=-10,
+        ),
+        "Superhighway M-9": pdk.ViewState(
+            latitude=24.945,
+            longitude=67.125,
+            zoom=13.2,
+            pitch=25,
+            bearing=30,
+        ),
+        "Port Qasim Freight Corridor": pdk.ViewState(
+            latitude=24.845,
+            longitude=67.160,
+            zoom=13.2,
+            pitch=20,
+            bearing=-20,
+        ),
+        # Backward-compatibility aliases
         "Saddar & I.I. Chundrigar Downtown": pdk.ViewState(
             latitude=24.854,
             longitude=67.016,
-            zoom=14.0,
-            pitch=15,
+            zoom=14.2,
+            pitch=20,
             bearing=10,
         ),
         "Clifton & Marine Drive Corridor": pdk.ViewState(
             latitude=24.818,
             longitude=67.032,
-            zoom=13.8,
-            pitch=15,
+            zoom=14.0,
+            pitch=20,
             bearing=-10,
         ),
     }
@@ -277,10 +327,12 @@ def build_traffic_deck(
     display_mode: str = "Active Traffic Only",
     show_zones: bool = False,
     show_heatmap: bool = False,
+    highlight_deadlocks: bool = True,
+    scale_widths: bool = True,
 ) -> pdk.Deck:
     """
     Constructs a PyDeck visual Deck containing layered road segments,
-    congestion overlays, OD zone bounds, and bottleneck heatmaps.
+    congestion overlays, OD zone bounds, deadlock highlighters, and bottleneck heatmaps.
     """
     layers: List[pdk.Layer] = []
 
@@ -290,12 +342,24 @@ def build_traffic_deck(
     elif display_mode == "Congested Corridors Only":
         render_df = merged_df[
             (merged_df["vehicle_count"] > 0) &
-            (merged_df["congestion_status"].isin(["Moderate Flow (Slowing)", "Severe Bottleneck (Queue)"]))
+            (merged_df["congestion_status"].isin([
+                "Moderate Flow (Slowing)",
+                "Severe Bottleneck (Queue)",
+                "Standstill Gridlock (Deadlock)",
+            ]))
         ].copy()
     elif display_mode == "Severe Bottlenecks Only":
         render_df = merged_df[
             (merged_df["vehicle_count"] > 0) &
-            (merged_df["congestion_status"] == "Severe Bottleneck (Queue)")
+            (merged_df["congestion_status"].isin([
+                "Severe Bottleneck (Queue)",
+                "Standstill Gridlock (Deadlock)",
+            ]))
+        ].copy()
+    elif display_mode == "Standstill Deadlocks Only":
+        render_df = merged_df[
+            (merged_df["vehicle_count"] > 0) &
+            (merged_df["congestion_status"] == "Standstill Gridlock (Deadlock)")
         ].copy()
     elif display_mode == "Major Arteries + Active Traffic":
         # Major arteries (lanes >= 2 or speed limit >= 2) plus active roads
@@ -304,6 +368,10 @@ def build_traffic_deck(
         render_df = merged_df[major_mask | active_mask].copy()
     else:  # Complete Road Network (74k segments)
         render_df = merged_df.copy()
+
+    # Optional uniform width override
+    if not scale_widths and not render_df.empty:
+        render_df["line_width"] = 1.8
 
     # 1. Base layer: Origin / Destination zone bounding polygon layer
     if show_zones:
@@ -338,21 +406,47 @@ def build_traffic_deck(
             get_width="line_width",
             width_units="pixels",
             width_min_pixels=1.0,
-            width_max_pixels=4.0,
+            width_max_pixels=5.0,
             pickable=True,
             auto_highlight=True,
             highlight_color=[255, 255, 255, 180],
         )
         layers.append(traffic_layer)
 
-    # 3. Top layer: Optional bottleneck density heatmap layer
+    # 3. Deadlock Highlighter layer (Standstill Gridlock in Vivid Magenta)
+    if highlight_deadlocks:
+        deadlock_df = merged_df[
+            (merged_df["vehicle_count"] > 0) &
+            (merged_df["congestion_status"] == "Standstill Gridlock (Deadlock)")
+        ]
+        if not deadlock_df.empty:
+            deadlock_layer = pdk.Layer(
+                "LineLayer",
+                data=deadlock_df,
+                id="deadlock-highlighter-lines",
+                get_source_position=["start_lon", "start_lat"],
+                get_target_position=["end_lon", "end_lat"],
+                get_color=COLOR_DEADLOCK,
+                get_width=5.5,
+                width_units="pixels",
+                width_min_pixels=3.0,
+                width_max_pixels=8.0,
+                pickable=True,
+                auto_highlight=True,
+                highlight_color=[255, 255, 255, 230],
+            )
+            layers.append(deadlock_layer)
+
+    # 4. Top layer: Optional bottleneck and deadlock density heatmap layer
     if show_heatmap:
-        bottleneck_df = merged_df[merged_df["congestion_status"] == "Severe Bottleneck (Queue)"]
+        bottleneck_df = merged_df[
+            merged_df["congestion_status"].isin(["Severe Bottleneck (Queue)", "Standstill Gridlock (Deadlock)"])
+        ]
         if not bottleneck_df.empty:
             heatmap_data = pd.DataFrame({
                 "lon": bottleneck_df["mid_lon"],
                 "lat": bottleneck_df["mid_lat"],
-                "weight": bottleneck_df["vehicle_count"] * (bottleneck_df["density_ratio"] + 0.1),
+                "weight": bottleneck_df["vehicle_count"] * (bottleneck_df["density_ratio"] + 0.15),
             })
             heatmap_layer = pdk.Layer(
                 "HeatmapLayer",
@@ -360,8 +454,8 @@ def build_traffic_deck(
                 id="bottleneck-heatmap",
                 get_position=["lon", "lat"],
                 get_weight="weight",
-                radius_pixels=40,
-                intensity=1.8,
+                radius_pixels=42,
+                intensity=2.0,
                 threshold=0.08,
             )
             layers.append(heatmap_layer)
@@ -369,17 +463,18 @@ def build_traffic_deck(
     # Tooltip configuration for interactive segment inspection
     tooltip = {
         "html": """
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.5; color: #f9fafb; background: rgba(15, 23, 42, 0.95); padding: 10px 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-            <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px; color: #38bdf8;">
-                Road Segment #{segment_id}
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; font-size: 12px; line-height: 1.5; color: #f8fafc; background: #101726; padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 24px rgba(0,0,0,0.6); backdrop-filter: blur(8px);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px;">
+                <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 700; font-size: 13px; color: #38bdf8;">SEGMENT #{segment_id}</span>
+                <span style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); color: #cbd5e1;">Lanes: {lanes}</span>
             </div>
-            <div><b>Status:</b> {congestion_status}</div>
-            <div><b>Active Cars:</b> <span style="color: #4ade80; font-weight: 600;">{vehicle_count}</span></div>
-            <div><b>Average Speed:</b> {avg_speed_kmh} km/h <span style="color: #94a3b8;">({avg_speed} cells/s)</span></div>
-            <div><b>Density Ratio:</b> {density_pct}%</div>
-            <hr style="margin: 6px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);" />
-            <div style="color: #cbd5e1; font-size: 11px;">
-                Lanes: {lanes} | Length: {length_meters} m | Limit: {speed_limit_kmh} km/h
+            <div style="margin-bottom: 3px;"><b>Status:</b> {congestion_status}</div>
+            <div style="margin-bottom: 3px;"><b>Active Cars:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #4ade80; font-weight: 600;">{vehicle_count}</span></div>
+            <div style="margin-bottom: 3px;"><b>Average Speed:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #f8fafc; font-weight: 600;">{avg_speed_kmh} km/h</span> <span style="color: #94a3b8; font-size: 11px;">({avg_speed} cells/s)</span></div>
+            <div style="margin-bottom: 4px;"><b>Density Ratio:</b> <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 600;">{density_pct}%</span></div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 4px; color: #94a3b8; font-size: 11px; display: flex; justify-content: space-between;">
+                <span>Length: {length_meters}m</span>
+                <span>Speed Limit: {speed_limit_kmh} km/h</span>
             </div>
         </div>
         """,
