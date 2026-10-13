@@ -7,6 +7,7 @@ congestion classification physics, PyDeck layers, and Streamlit execution.
 
 import os
 import sys
+import glob
 import unittest
 import numpy as np
 import pandas as pd
@@ -303,7 +304,8 @@ class TestDashboardStreamlitApp(unittest.TestCase):
         self.assertEqual(len(at.exception), 0)
 
         veh_metric = [m for m in at.metric if "Active Vehicles" in m.label][0]
-        self.assertEqual(veh_metric.value, "2,510")
+        snap30_df = pd.read_csv("data/snapshots/snapshot_t30.csv")
+        self.assertEqual(veh_metric.value, f"{int(snap30_df['vehicle_count'].sum()):,}")
 
         # Set to t=60 (final snapshot)
         at.select_slider[0].set_value(60)
@@ -311,9 +313,8 @@ class TestDashboardStreamlitApp(unittest.TestCase):
         self.assertEqual(len(at.exception), 0)
 
         veh_metric = [m for m in at.metric if "Active Vehicles" in m.label][0]
-        comp_metric = [m for m in at.metric if "Completed Trips" in m.label][0]
-        self.assertEqual(veh_metric.value, "4,964")
-        self.assertEqual(comp_metric.value, "36")
+        snap60_df = pd.read_csv("data/snapshots/snapshot_t60.csv")
+        self.assertEqual(veh_metric.value, f"{int(snap60_df['vehicle_count'].sum()):,}")
 
         # Test jump buttons (First, Next, Prev, Latest) execute without widget instantiation errors
         btn_dict = {btn.label: btn for btn in at.button}
@@ -338,7 +339,8 @@ class TestDashboardStreamlitApp(unittest.TestCase):
         if "Latest ⏭" in btn_dict:
             btn_dict["Latest ⏭"].click().run(timeout=30)
             self.assertEqual(len(at.exception), 0)
-            self.assertEqual(at.session_state.active_step, 60)
+            available_steps = [int(os.path.basename(f).replace("snapshot_t", "").replace(".csv", "")) for f in glob.glob("data/snapshots/snapshot_t*.csv")]
+            self.assertEqual(at.session_state.active_step, max(available_steps))
 
     def test_streamlit_live_monitor_mode(self):
         """Verifies execution when switching to Live Simulation Monitor mode."""

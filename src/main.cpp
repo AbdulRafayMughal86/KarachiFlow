@@ -9,6 +9,7 @@
 #include "mpi_engine.hpp"
 #include "mpi_partitioner.hpp"
 #include "hybrid_engine.hpp"
+#include "cuda_engine.cuh"
 
 #if defined(HAS_MPI) || defined(MPI_VERSION)
 #include <mpi.h>
@@ -24,6 +25,7 @@ void print_usage(const char* prog_name) {
               << "  --steps <S>               Simulation timesteps (seconds) (default: 60 in dev, 3600 in full)\n"
               << "  --mpi                     Run distributed-memory MPI engine\n"
               << "  --hybrid                  Run hybrid orchestration engine (MPI + OpenMP)\n"
+              << "  --cuda                    Run GPU acceleration engine\n"
               << "  --threads <T>             OpenMP thread count (default: all available cores)\n"
               << "  --schedule <type> [chunk] OpenMP loop schedule: static, dynamic, guided (default: dynamic 64)\n"
               << "  --chunk-size <N>          OpenMP scheduling chunk size (default: 64)\n"
@@ -50,6 +52,7 @@ int main(int argc, char* argv[]) {
     bool run_benchmark = false;
     bool use_mpi = false;
     bool use_hybrid = false;
+    bool use_cuda = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -62,6 +65,8 @@ int main(int argc, char* argv[]) {
             use_mpi = true;
         } else if (arg == "--hybrid") {
             use_hybrid = true;
+        } else if (arg == "--cuda") {
+            use_cuda = true;
         } else if (arg == "--sequential") {
             use_sequential = true;
         } else if (arg == "--benchmark") {
@@ -486,6 +491,52 @@ int main(int argc, char* argv[]) {
         std::cout << "  - Total Cell Updates:    " << metrics.total_cell_updates << "\n";
         std::cout << "  - Average Step Latency:  " << std::fixed << std::setprecision(2)
                   << metrics.avg_step_time_us << " us/step\n";
+        std::cout << "  - Cell Update Rate:      " << std::scientific << std::setprecision(3)
+                  << metrics.updates_per_second << " cell updates/sec\n";
+        std::cout << "  - Average Network Speed: " << std::fixed << std::setprecision(2)
+                  << metrics.avg_network_speed << " cells/s ("
+                  << (metrics.avg_network_speed * karachiflow::CELLS_PER_SEC_TO_KMH) << " km/h)\n";
+        std::cout << "========================================================\n";
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+        int mpi_finalized = 0;
+        MPI_Finalized(&mpi_finalized);
+        if (!mpi_finalized) {
+            MPI_Finalize();
+        }
+#endif
+        return 0;
+    }
+
+    if (use_cuda) {
+        karachiflow::CudaEngine cuda_sim;
+        std::string err_msg;
+        if (!cuda_sim.initialize(config, &err_msg)) {
+            std::cerr << "[ERROR] GPU simulation initialization failed: " << err_msg << "\n";
+            return 1;
+        }
+
+        std::cout << "  - Parallel Engine:       GPU Acceleration (NVIDIA Ada Lovelace)\n";
+        std::cout << "  - Memory Architecture:   Structure of Arrays (SoA) Resident\n";
+        std::cout << "  - Collision Arbitrate:   Deterministic atomicMin\n\n";
+
+        cuda_sim.run();
+
+        uint64_t g_act = 0, g_comp = 0, g_inj = 0;
+        const bool conserved = cuda_sim.verify_global_conservation(&g_act, &g_comp, &g_inj);
+        const auto& metrics = cuda_sim.metrics();
+
+        std::cout << "\n========================================================\n";
+        std::cout << " Simulation Execution Summary (GPU Acceleration Engine)\n";
+        std::cout << "========================================================\n";
+        std::cout << "  - Execution Time:        " << std::fixed << std::setprecision(2)
+                  << metrics.total_sim_time_ms << " ms ("
+                  << (metrics.total_sim_time_ms / 1000.0) << " s)\n";
+        std::cout << "  - Simulated Steps:       " << metrics.steps_executed << "\n";
+        std::cout << "  - Injected Vehicles:     " << g_inj << "\n";
+        std::cout << "  - Active Vehicles:       " << g_act << "\n";
+        std::cout << "  - Completed Trips:       " << g_comp << "\n";
+        std::cout << "  - Vehicle Conservation:  " << (conserved ? "VERIFIED (100% Conserved)" : "MISMATCH") << "\n";
+        std::cout << "  - Total Cell Updates:    " << metrics.total_cell_updates << "\n";
         std::cout << "  - Cell Update Rate:      " << std::scientific << std::setprecision(3)
                   << metrics.updates_per_second << " cell updates/sec\n";
         std::cout << "  - Average Network Speed: " << std::fixed << std::setprecision(2)

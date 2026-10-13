@@ -17,6 +17,15 @@ endif()
 find_package(OpenMP REQUIRED)
 find_package(MPI QUIET)
 
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_ARCHITECTURES 89)
+    add_compile_definitions(HAS_CUDA=1)
+endif()
+
 include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/engine ${CMAKE_SOURCE_DIR}/src/parallel)
 
 # Network binary reader and benchmark target
@@ -64,6 +73,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
         add_executable(test_hybrid_simulation ${CMAKE_SOURCE_DIR}/src/parallel/test_hybrid_simulation.cpp ${CORE_SOURCES})
         target_link_libraries(test_hybrid_simulation PRIVATE OpenMP::OpenMP_CXX MPI::MPI_CXX)
         target_compile_definitions(test_hybrid_simulation PRIVATE HAS_MPI=1)
+    endif()
+
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/parallel/test_cuda_simulation.cpp)
+        add_executable(test_cuda_simulation ${CMAKE_SOURCE_DIR}/src/parallel/test_cuda_simulation.cpp ${CORE_SOURCES})
+        target_link_libraries(test_cuda_simulation PRIVATE OpenMP::OpenMP_CXX)
     endif()
 endif()
 

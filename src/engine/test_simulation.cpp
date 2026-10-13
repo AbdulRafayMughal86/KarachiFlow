@@ -27,7 +27,7 @@ int main() {
     config.metadata_path = "data/karachi_network_metadata.json";
     config.snapshot_dir = "data/snapshots";
     config.target_vehicles = 1000;
-    config.total_steps = 30;
+    config.total_steps = 60;
     config.snapshot_interval = 10;
     config.p_slow = 0.2f;
     config.dev_mode = true;
@@ -39,7 +39,7 @@ int main() {
     check_condition(sim.initialize(config, &err_msg), "Initialization error: " + err_msg);
     std::cout << "   [PASS] Initialized successfully. Total cells: " << sim.network().total_cells() << "\n";
 
-    std::cout << "2. Stepping through 30 timesteps and verifying invariants...\n";
+    std::cout << "2. Stepping through " << config.total_steps << " timesteps and verifying invariants...\n";
     for (uint32_t step = 1; step <= config.total_steps; ++step) {
         sim.step();
 
