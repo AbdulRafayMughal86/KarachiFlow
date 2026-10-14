@@ -73,6 +73,8 @@ bool Simulation::initialize(const SimulationConfig& config, std::string* error_m
     m_injected_vehicles = 0;
     m_metrics = SimulationMetrics{};
 
+    seed_interior_vehicles();
+
     return true;
 }
 
@@ -195,6 +197,58 @@ void Simulation::prepare_demand_candidates() {
         m_origin_candidate_segments.reserve(seg_count);
         for (uint32_t i = 0; i < seg_count; ++i) {
             m_origin_candidate_segments.push_back(static_cast<int32_t>(i));
+        }
+    }
+}
+
+void Simulation::seed_interior_vehicles() {
+    uint32_t n_seed = 0;
+    if (m_config.seed_vehicles > 0) {
+        n_seed = std::min(m_config.seed_vehicles, m_config.target_vehicles);
+    } else if (m_config.seed_density > 0.0f) {
+        n_seed = std::min(static_cast<uint32_t>(m_network.total_cells() * m_config.seed_density), m_config.target_vehicles);
+    }
+    if (n_seed == 0) return;
+
+    double cell_accum = 0.0;
+    const double cell_rate = static_cast<double>(n_seed) / static_cast<double>(m_network.total_cells());
+
+    for (size_t s_idx = 0; s_idx < m_segments.size() && m_injected_vehicles < n_seed; ++s_idx) {
+        const auto& seg = m_segments[s_idx];
+        const int16_t lanes = seg.lanes();
+        const int16_t cpl = seg.cells_per_lane();
+
+        for (int16_t l = 0; l < lanes && m_injected_vehicles < n_seed; ++l) {
+            for (int16_t c = 0; c < cpl && m_injected_vehicles < n_seed; ++c) {
+                cell_accum += cell_rate;
+                if (cell_accum >= 1.0) {
+                    cell_accum -= 1.0;
+                    size_t g_idx = seg.local_to_global_cell(l, c);
+                    if (is_empty(m_current_cells[g_idx])) {
+                        uint32_t veh_id = m_injected_vehicles;
+                        auto& v = m_vehicles[veh_id];
+                        v.id = static_cast<int32_t>(veh_id);
+                        v.segment_id = static_cast<int32_t>(s_idx);
+                        v.lane = l;
+                        v.cell_idx = c;
+                        v.velocity = std::min(static_cast<uint8_t>(1), static_cast<uint8_t>(seg.speed_limit()));
+                        v.max_velocity = static_cast<uint8_t>(seg.speed_limit());
+                        v.origin_node = seg.from_node();
+                        v.dest_zone = (m_dest_zone_count > 0) ? static_cast<int32_t>(veh_id % m_dest_zone_count) : 0;
+                        if (m_dest_zone_count > 0 && !m_active_dest_nodes[v.dest_zone].empty()) {
+                            const auto& dnodes = m_active_dest_nodes[v.dest_zone];
+                            v.dest_node = dnodes[veh_id % dnodes.size()];
+                        }
+                        v.active = true;
+                        v.steps_traveled = 0;
+                        v.cells_traveled = 0;
+
+                        m_current_cells[g_idx] = static_cast<int32_t>(veh_id);
+                        m_injected_vehicles++;
+                        m_active_vehicle_count++;
+                    }
+                }
+            }
         }
     }
 }

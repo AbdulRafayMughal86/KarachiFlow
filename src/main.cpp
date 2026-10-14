@@ -36,6 +36,8 @@ void print_usage(const char* prog_name) {
               << "  --network <path>          Binary road graph path (default: data/karachi_network.bin)\n"
               << "  --metadata <path>         Network metadata JSON path (default: data/karachi_network_metadata.json)\n"
               << "  --p-slow <float>          NaSch stochastic slowing probability (default: 0.2)\n"
+              << "  --seed-density <rho>      Interior spatial pre-seeding density (0.0 to 0.8)\n"
+              << "  --seed-vehicles <N>       Interior spatial pre-seeding vehicle count\n"
               << "  --help                    Show this help message\n";
 }
 
@@ -104,6 +106,10 @@ int main(int argc, char* argv[]) {
             config.metadata_path = argv[++i];
         } else if (arg == "--p-slow" && i + 1 < argc) {
             config.p_slow = std::stof(argv[++i]);
+        } else if (arg == "--seed-density" && i + 1 < argc) {
+            config.seed_density = std::stof(argv[++i]);
+        } else if (arg == "--seed-vehicles" && i + 1 < argc) {
+            config.seed_vehicles = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             print_usage(argv[0]);
@@ -158,6 +164,13 @@ int main(int argc, char* argv[]) {
         std::cout << "  - Random Slowdown p:   " << config.p_slow << "\n";
         std::cout << "  - Network File:        " << config.network_path << "\n";
         std::cout << "  - Metadata File:       " << config.metadata_path << "\n";
+        if (config.seed_vehicles > 0) {
+            std::cout << "  - Spatial Pre-seeding: " << config.seed_vehicles << " vehicles\n";
+        } else if (config.seed_density > 0.0f) {
+            std::cout << "  - Spatial Pre-seeding: density rho = " << config.seed_density << "\n";
+        } else {
+            std::cout << "  - Spatial Pre-seeding: Disabled (Boundary Inflow)\n";
+        }
     }
 
     if (use_hybrid && run_benchmark) {

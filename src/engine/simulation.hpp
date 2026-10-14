@@ -20,6 +20,8 @@ struct SimulationConfig {
     uint32_t snapshot_interval{10};
     float p_slow{0.2f};
     bool dev_mode{false};
+    float seed_density{0.0f};
+    uint32_t seed_vehicles{0};
 };
 
 struct SimulationMetrics {
@@ -59,6 +61,7 @@ public:
 private:
     void precompute_routing_tables();
     void prepare_demand_candidates();
+    void seed_interior_vehicles();
     void inject_demand();
     void update_vehicles();
     void update_metrics();

@@ -33,21 +33,27 @@ BINARY_VERSION = 1
 # Bounding boxes (left, bottom, right, top) = (min_lon, min_lat, max_lon, max_lat)
 BBOX_DEV = (67.010, 24.840, 67.165, 24.935)   # Saddar <-> Shahrah-e-Faisal <-> Airport / Gulshan corridor
 BBOX_FULL = (66.850, 24.750, 67.350, 25.100)  # Complete metropolitan Karachi
+BBOX_REGIONAL = (66.800, 24.700, 68.450, 25.450)  # Mega-corridor: Karachi + Gadap/Bahria/M-10 + M-9 to Hyderabad/Jamshoro
 
 # Origin (Residential) and Destination (Commercial / Hub) Zones: [min_lat, max_lat, min_lon, max_lon]
 ZONES_RESIDENTIAL = {
-    "Gulshan-e-Iqbal":    [24.900, 24.945, 67.070, 67.125],
-    "Gulistan-e-Johar":   [24.905, 24.950, 67.125, 67.175],
-    "North Nazimabad":    [24.920, 24.965, 67.020, 67.065],
-    "Korangi":            [24.815, 24.860, 67.100, 67.170],
+    "Gulshan-e-Iqbal":     [24.900, 24.945, 67.070, 67.125],
+    "Gulistan-e-Johar":    [24.905, 24.950, 67.125, 67.175],
+    "North Nazimabad":     [24.920, 24.965, 67.020, 67.065],
+    "Korangi":             [24.815, 24.860, 67.100, 67.170],
+    "Bahria Town / Gadap": [25.000, 25.200, 67.250, 67.450],
+    "Hyderabad Qasimabad":  [25.360, 25.420, 68.300, 68.360],
 }
 
 ZONES_COMMERCIAL = {
-    "I.I. Chundrigar":    [24.845, 24.860, 66.995, 67.015],
-    "Saddar":             [24.850, 24.870, 67.010, 67.035],
-    "Clifton":            [24.805, 24.840, 67.015, 67.050],
-    "SITE":               [24.890, 24.930, 66.980, 67.020],
-    "Airport":            [24.895, 24.920, 67.150, 67.180],
+    "I.I. Chundrigar":     [24.845, 24.860, 66.995, 67.015],
+    "Saddar":              [24.850, 24.870, 67.010, 67.035],
+    "Clifton":             [24.805, 24.840, 67.015, 67.050],
+    "SITE":                [24.890, 24.930, 66.980, 67.020],
+    "Airport":             [24.895, 24.920, 67.150, 67.180],
+    "Hyderabad City Hub":   [25.370, 25.420, 68.340, 68.390],
+    "Jamshoro Toll / Hub":  [25.380, 25.460, 68.240, 68.300],
+    "M-9 Logistics Hub":    [24.980, 25.080, 67.150, 67.280],
 }
 
 # Highway defaults: (lanes, speed_limit in cells/s [1 cell/s = 27 km/h])
@@ -457,19 +463,19 @@ def main():
     parser = argparse.ArgumentParser(description="KarachiFlow OSMnx Road Network Preprocessor")
     parser.add_argument(
         "--mode",
-        choices=["dev", "full", "synthetic"],
+        choices=["dev", "full", "regional", "mega", "synthetic"],
         default="dev",
-        help="Preprocessing mode: dev (corridor sub-bbox), full (metro Karachi), or synthetic (offline grid)"
+        help="Preprocessing mode: dev (corridor sub-bbox), full (metro Karachi), regional/mega (mega-corridor to Hyderabad), or synthetic"
     )
     parser.add_argument(
         "--output-bin",
         default="data/karachi_network.bin",
-        help="Output binary file path (default: data/karachi_network.bin)"
+        help="Output binary file path (default: data/karachi_network.bin, or data/karachi_regional_network.bin in regional mode)"
     )
     parser.add_argument(
         "--output-meta",
         default="data/karachi_network_metadata.json",
-        help="Output metadata JSON path (default: data/karachi_network_metadata.json)"
+        help="Output metadata JSON path (default: data/karachi_network_metadata.json, or data/karachi_regional_network_metadata.json in regional mode)"
     )
     parser.add_argument(
         "--cache-dir",
@@ -483,6 +489,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Automatically preserve standard network binary when running in regional / mega mode
+    if args.mode in ["regional", "mega"]:
+        if args.output_bin == "data/karachi_network.bin":
+            args.output_bin = "data/karachi_regional_network.bin"
+        if args.output_meta == "data/karachi_network_metadata.json":
+            args.output_meta = "data/karachi_regional_network_metadata.json"
+
     os.makedirs("data", exist_ok=True)
     os.makedirs(args.cache_dir, exist_ok=True)
 
@@ -497,6 +511,9 @@ def main():
     elif args.mode == "full":
         cache_file = os.path.join(args.cache_dir, "karachi_full_raw.graphml")
         G = fetch_osm_graph(BBOX_FULL, cache_file, use_cache=not args.no_cache)
+    elif args.mode in ["regional", "mega"]:
+        cache_file = os.path.join(args.cache_dir, "karachi_regional_raw.graphml")
+        G = fetch_osm_graph(BBOX_REGIONAL, cache_file, use_cache=not args.no_cache)
     else:
         raise ValueError(f"Unknown mode: {args.mode}")
 

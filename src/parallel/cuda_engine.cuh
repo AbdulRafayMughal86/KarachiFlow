@@ -96,8 +96,10 @@ private:
     void allocate_device_memory();
     void free_device_memory();
     void copy_static_topology_to_device();
+    void copy_vehicles_to_device(uint32_t start_idx, uint32_t count);
     void precompute_routing_tables();
     void prepare_demand_candidates();
+    void seed_interior_vehicles();
     void inject_demand();
     void update_metrics();
 
@@ -119,6 +121,18 @@ private:
     std::vector<std::vector<int32_t>> m_active_dest_nodes;
 
     CudaDeviceArrays m_device_arrays{};
+
+    // Pre-allocated host fallback arbitration buffers
+    struct HostVehicleIntent {
+        int32_t target_g{-1};
+        int32_t target_seg{-1};
+        int16_t target_lane{0};
+        int16_t target_cell{0};
+        uint8_t speed{0};
+        bool trip_done{false};
+    };
+    std::vector<int32_t> m_host_claims;
+    std::vector<HostVehicleIntent> m_host_intents;
 
     uint32_t m_current_step{0};
     uint32_t m_injected_vehicles{0};

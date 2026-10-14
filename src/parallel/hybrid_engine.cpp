@@ -159,6 +159,8 @@ bool HybridEngine::initialize(const SimulationConfig& config,
     m_metrics.omp_threads = m_effective_threads;
     m_metrics.total_workers = m_total_ranks * m_effective_threads;
 
+    seed_interior_vehicles();
+
     return true;
 }
 
@@ -262,6 +264,80 @@ void HybridEngine::prepare_demand_candidates() {
         const uint32_t seg_count = m_network.segment_count();
         for (uint32_t i = 0; i < seg_count; ++i) {
             m_origin_candidate_segments.push_back(static_cast<int32_t>(i));
+        }
+    }
+}
+
+void HybridEngine::seed_interior_vehicles() {
+    uint32_t total_seed = 0;
+    if (m_config.seed_vehicles > 0) {
+        total_seed = std::min(m_config.seed_vehicles, m_config.target_vehicles);
+    } else if (m_config.seed_density > 0.0f) {
+        total_seed = std::min(static_cast<uint32_t>(m_network.total_cells() * m_config.seed_density), m_config.target_vehicles);
+    }
+    if (total_seed == 0) return;
+
+    const uint32_t base_seed = total_seed / m_total_ranks;
+    const uint32_t rem_seed = total_seed % m_total_ranks;
+    const uint32_t local_seed_target = base_seed + (static_cast<uint32_t>(m_rank) < rem_seed ? 1u : 0u);
+
+    const uint32_t total_target = m_config.target_vehicles;
+    const uint32_t base_share = total_target / m_total_ranks;
+    const uint32_t remainder = total_target % m_total_ranks;
+    const uint32_t local_id_start = static_cast<uint32_t>(m_rank) * base_share +
+                                   std::min(static_cast<uint32_t>(m_rank), remainder);
+
+    const auto& rank_segs = m_partition.rank_segments[m_rank];
+    if (rank_segs.empty() || local_seed_target == 0) return;
+
+    uint64_t rank_cells = 0;
+    for (int32_t s_id : rank_segs) {
+        rank_cells += m_segments[s_id].total_cells();
+    }
+    if (rank_cells == 0) return;
+
+    double cell_accum = 0.0;
+    const double cell_rate = static_cast<double>(local_seed_target) / static_cast<double>(rank_cells);
+
+    for (int32_t s_id : rank_segs) {
+        if (m_injected_vehicles >= local_seed_target) break;
+        const auto& seg = m_segments[s_id];
+        const int16_t lanes = seg.lanes();
+        const int16_t cpl = seg.cells_per_lane();
+
+        for (int16_t l = 0; l < lanes && m_injected_vehicles < local_seed_target; ++l) {
+            for (int16_t c = 0; c < cpl && m_injected_vehicles < local_seed_target; ++c) {
+                cell_accum += cell_rate;
+                if (cell_accum >= 1.0) {
+                    cell_accum -= 1.0;
+                    size_t g_idx = seg.local_to_global_cell(l, c);
+                    if (is_empty(m_current_cells[g_idx])) {
+                        uint32_t veh_id = local_id_start + m_injected_vehicles;
+                        if (veh_id < m_vehicles.size()) {
+                            auto& v = m_vehicles[veh_id];
+                            v.id = static_cast<int32_t>(veh_id);
+                            v.segment_id = s_id;
+                            v.lane = l;
+                            v.cell_idx = c;
+                            v.velocity = std::min(static_cast<uint8_t>(1), static_cast<uint8_t>(seg.speed_limit()));
+                            v.max_velocity = static_cast<uint8_t>(seg.speed_limit());
+                            v.origin_node = seg.from_node();
+                            v.dest_zone = (m_dest_zone_count > 0) ? static_cast<int32_t>(veh_id % m_dest_zone_count) : 0;
+                            if (m_dest_zone_count > 0 && !m_active_dest_nodes[v.dest_zone].empty()) {
+                                const auto& dnodes = m_active_dest_nodes[v.dest_zone];
+                                v.dest_node = dnodes[veh_id % dnodes.size()];
+                            }
+                            v.active = true;
+                            v.steps_traveled = 0;
+                            v.cells_traveled = 0;
+
+                            m_current_cells[g_idx] = static_cast<int32_t>(veh_id);
+                            m_injected_vehicles++;
+                            m_active_vehicle_count++;
+                        }
+                    }
+                }
+            }
         }
     }
 }

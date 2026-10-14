@@ -102,6 +102,7 @@ public:
 private:
     void precompute_routing_tables();
     void prepare_demand_candidates();
+    void seed_interior_vehicles();
     void inject_demand();
 
     void update_boundary_segments();
