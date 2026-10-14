@@ -611,8 +611,9 @@ def main():
     gpu_record: Optional[Dict[str, Any]] = None
     if not args.skip_cuda:
         print("\n6. Benchmarking GPU Acceleration Engine (Structure of Arrays)...")
+        cuda_bin = find_binary(bin_dir, "karachiflow_gpu") or karachiflow_bin
         cmd_cuda = [
-            str(karachiflow_bin),
+            str(cuda_bin),
             "--cuda",
             "--cars", str(target_cars),
             "--steps", str(steps),
