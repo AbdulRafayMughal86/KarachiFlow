@@ -675,46 +675,11 @@ void CudaEngine::inject_demand() {
 }
 
 void CudaEngine::step() {
-    uint32_t prev_injected = m_injected_vehicles;
     inject_demand();
 
 #if defined(__CUDACC__)
     const uint32_t n_veh = m_injected_vehicles;
     if (n_veh > 0) {
-        if (m_injected_vehicles > prev_injected) {
-            uint32_t count = m_injected_vehicles - prev_injected;
-            std::vector<int32_t> h_seg(count);
-            std::vector<int16_t> h_lane(count);
-            std::vector<int16_t> h_cell(count);
-            std::vector<uint8_t> h_vel(count);
-            std::vector<uint8_t> h_max_vel(count);
-            std::vector<int32_t> h_dest(count);
-            std::vector<uint8_t> h_act(count);
-            std::vector<uint32_t> h_cells_trav(count, 0);
-            std::vector<uint32_t> h_steps_trav(count, 0);
-
-            for (uint32_t i = 0; i < count; ++i) {
-                uint32_t idx = prev_injected + i;
-                h_seg[i] = m_vehicles[idx].segment_id;
-                h_lane[i] = m_vehicles[idx].lane;
-                h_cell[i] = m_vehicles[idx].cell_idx;
-                h_vel[i] = m_vehicles[idx].velocity;
-                h_max_vel[i] = m_vehicles[idx].max_velocity;
-                h_dest[i] = m_vehicles[idx].dest_zone;
-                h_act[i] = m_vehicles[idx].active ? 1 : 0;
-            }
-
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_segment_id + prev_injected, h_seg.data(), count * sizeof(int32_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_lane + prev_injected, h_lane.data(), count * sizeof(int16_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_cell_idx + prev_injected, h_cell.data(), count * sizeof(int16_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_velocity + prev_injected, h_vel.data(), count * sizeof(uint8_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_max_velocity + prev_injected, h_max_vel.data(), count * sizeof(uint8_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_dest_zone + prev_injected, h_dest.data(), count * sizeof(int32_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_active + prev_injected, h_act.data(), count * sizeof(uint8_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_cells_traveled + prev_injected, h_cells_trav.data(), count * sizeof(uint32_t), cudaMemcpyHostToDevice));
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_vehicle_steps_traveled + prev_injected, h_steps_trav.data(), count * sizeof(uint32_t), cudaMemcpyHostToDevice));
-        }
-
         const int block_size = 256;
         const int grid_size = (n_veh + block_size - 1) / block_size;
 
