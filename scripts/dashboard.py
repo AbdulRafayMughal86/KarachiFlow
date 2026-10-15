@@ -8,6 +8,7 @@ Zero sidebar clutter, unified floating controls, and high-contrast dark telemetr
 
 import os
 import glob
+import json
 import time
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -328,34 +329,44 @@ def main():
         return
 
     # Load dynamic benchmark dataset with empirical reference fallback
-    benchmarks = metrics_plotter.get_empirical_benchmarks()
+    benchmarks = metrics_plotter.load_benchmark_data()
     hyb_bench = benchmarks.get("hybrid", {})
     omp_bench = benchmarks.get("openmp", {})
     mpi_bench = benchmarks.get("mpi", {})
     cuda_bench = benchmarks.get("cuda", {})
     seq_bench = benchmarks.get("sequential", {})
 
-    hyb_sp = max(hyb_bench.get("speedup_vs_seq", [8.29])) if hyb_bench.get("speedup_vs_seq") else 8.29
-    omp_sp = max(omp_bench.get("speedup_vs_seq", [7.57])) if omp_bench.get("speedup_vs_seq") else 7.57
-    mpi_sp = max(mpi_bench.get("speedup_vs_seq", [7.48])) if mpi_bench.get("speedup_vs_seq") else 7.48
-    cuda_sp = cuda_bench.get("speedup_vs_seq", 14.10) if isinstance(cuda_bench.get("speedup_vs_seq"), (int, float)) else 14.10
+    def _extract_metric(bench: dict, key: str, default: float = 1.0, use_max: bool = True) -> float:
+        val = bench.get(key)
+        if val is None:
+            return default
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, (list, tuple)) and len(val) > 0:
+            return float(max(val)) if use_max else float(val[-1])
+        return default
+
+    hyb_sp = _extract_metric(hyb_bench, "speedup_vs_seq", default=1.0, use_max=True)
+    omp_sp = _extract_metric(omp_bench, "speedup_vs_seq", default=1.0, use_max=True)
+    mpi_sp = _extract_metric(mpi_bench, "speedup_vs_seq", default=1.0, use_max=True)
+    cuda_sp = _extract_metric(cuda_bench, "speedup_vs_seq", default=1.0, use_max=True)
     seq_sp = 1.00
 
-    hyb_tp = max(hyb_bench.get("throughput_mcells", [182.4])) if hyb_bench.get("throughput_mcells") else 182.4
-    omp_tp = max(omp_bench.get("throughput_mcells", [166.5])) if omp_bench.get("throughput_mcells") else 166.5
-    mpi_tp = max(mpi_bench.get("throughput_mcells", [164.6])) if mpi_bench.get("throughput_mcells") else 164.6
-    cuda_tp = cuda_bench.get("throughput_mcells", 310.2) if isinstance(cuda_bench.get("throughput_mcells"), (int, float)) else 310.2
-    seq_tp = seq_bench.get("throughput_mcells", 22.0) if isinstance(seq_bench.get("throughput_mcells"), (int, float)) else 22.0
+    hyb_tp = _extract_metric(hyb_bench, "throughput_mcells", default=1.0, use_max=True)
+    omp_tp = _extract_metric(omp_bench, "throughput_mcells", default=1.0, use_max=True)
+    mpi_tp = _extract_metric(mpi_bench, "throughput_mcells", default=1.0, use_max=True)
+    cuda_tp = _extract_metric(cuda_bench, "throughput_mcells", default=1.0, use_max=True)
+    seq_tp = _extract_metric(seq_bench, "throughput_mcells", default=1.0, use_max=True)
 
-    hyb_eff = max(hyb_bench.get("efficiency_self", [1.036])) if hyb_bench.get("efficiency_self") else 1.036
-    omp_eff = omp_bench.get("efficiency_self", [0.946])[-1] if omp_bench.get("efficiency_self") else 0.946
-    mpi_eff = mpi_bench.get("efficiency_self", [0.935])[-1] if mpi_bench.get("efficiency_self") else 0.935
+    hyb_eff = _extract_metric(hyb_bench, "efficiency_self", default=1.0, use_max=True)
+    omp_eff = _extract_metric(omp_bench, "efficiency_self", default=1.0, use_max=False)
+    mpi_eff = _extract_metric(mpi_bench, "efficiency_self", default=1.0, use_max=False)
 
     ENGINE_OPTIONS = [
         f"Hybrid MS-MPI + OpenMP (Peak {hyb_sp:.2f}×)",
-        f"OpenMP Multi-Core 8T ({omp_sp:.2f}×)",
-        f"Distributed MS-MPI 4R ({mpi_sp:.2f}×)",
-        "CUDA RTX 4000 Ada (sm_89)",
+        f"OpenMP Multi-Core ({omp_sp:.2f}×)",
+        f"Distributed MS-MPI ({mpi_sp:.2f}×)",
+        f"CUDA RTX 4000 Ada ({cuda_sp:.2f}×)",
         "Sequential Baseline T1",
     ]
 
@@ -363,27 +374,27 @@ def main():
         ENGINE_OPTIONS[0]: {
             "speedup": f"{hyb_sp:.2f}×",
             "chip": f"⚡ Hybrid MPI+OpenMP {hyb_sp:.2f}×",
-            "desc": "MPI (4 ranks) + OpenMP (2 threads)",
+            "desc": "MPI + OpenMP Hybrid Scaling",
             "throughput": f"{hyb_tp:.1f} Mcells/s",
             "efficiency": f"{hyb_eff * 100.0:.1f}%",
         },
         ENGINE_OPTIONS[1]: {
             "speedup": f"{omp_sp:.2f}×",
-            "chip": f"⚡ OpenMP 8T {omp_sp:.2f}×",
-            "desc": "Shared-Memory OpenMP 8 Threads",
+            "chip": f"⚡ OpenMP {omp_sp:.2f}×",
+            "desc": "Shared-Memory OpenMP Threads",
             "throughput": f"{omp_tp:.1f} Mcells/s",
             "efficiency": f"{omp_eff * 100.0:.1f}%",
         },
         ENGINE_OPTIONS[2]: {
             "speedup": f"{mpi_sp:.2f}×",
-            "chip": f"⚡ MS-MPI 4R {mpi_sp:.2f}×",
-            "desc": "Domain Decomposition 4 Ranks",
+            "chip": f"⚡ MS-MPI {mpi_sp:.2f}×",
+            "desc": "Domain Decomposition Ranks",
             "throughput": f"{mpi_tp:.1f} Mcells/s",
             "efficiency": f"{mpi_eff * 100.0:.1f}%",
         },
         ENGINE_OPTIONS[3]: {
             "speedup": f"{cuda_sp:.2f}×",
-            "chip": f"⚡ CUDA RTX 4000 Ada {cuda_sp:.1f}×",
+            "chip": f"⚡ CUDA {cuda_sp:.2f}×",
             "desc": "Massively Parallel GPU Kernels",
             "throughput": f"{cuda_tp:.1f} Mcells/s",
             "efficiency": "N/A (GPU Acceleration)",
@@ -406,7 +417,7 @@ def main():
         st.session_state.is_playing = False
     if "corridor_preset" not in st.session_state:
         st.session_state.corridor_preset = "Metropolitan Overview"
-    if "engine_choice" not in st.session_state:
+    if "engine_choice" not in st.session_state or st.session_state.engine_choice not in ENGINE_METRICS:
         st.session_state.engine_choice = ENGINE_OPTIONS[0]
     if "operation_mode" not in st.session_state:
         st.session_state.operation_mode = "Historical Replay"
@@ -421,10 +432,35 @@ def main():
     if "scale_widths" not in st.session_state:
         st.session_state.scale_widths = True
 
-    # Step jump button pre-execution callback
-    def _jump_step(target: int):
-        st.session_state.active_step = target
-        st.session_state.step_slider = target
+    # Dedicated transport callbacks
+    def _step_prev():
+        st.session_state.is_playing = False
+        curr = st.session_state.active_step
+        if curr in step_numbers:
+            idx = max(0, step_numbers.index(curr) - 1)
+        else:
+            idx = 0
+        if step_numbers:
+            st.session_state.active_step = step_numbers[idx]
+            st.session_state.step_slider = step_numbers[idx]
+
+    def _step_next():
+        st.session_state.is_playing = False
+        curr = st.session_state.active_step
+        if curr in step_numbers:
+            idx = min(len(step_numbers) - 1, step_numbers.index(curr) + 1)
+        else:
+            idx = 0
+        if step_numbers:
+            st.session_state.active_step = step_numbers[idx]
+            st.session_state.step_slider = step_numbers[idx]
+
+    def _toggle_play():
+        st.session_state.is_playing = not st.session_state.is_playing
+
+    def _on_slider_change():
+        st.session_state.is_playing = False
+        st.session_state.active_step = st.session_state.step_slider
 
     # Live simulation monitor synchronization
     if st.session_state.get("op_mode_radio") == "Live Simulation Monitor":
@@ -432,15 +468,6 @@ def main():
         if st.session_state.active_step != latest_step:
             st.session_state.active_step = latest_step
             st.session_state.step_slider = latest_step
-
-    # Auto-play tick loop
-    if st.session_state.is_playing:
-        curr_idx = step_numbers.index(st.session_state.active_step) if st.session_state.active_step in step_numbers else 0
-        next_idx = (curr_idx + 1) % len(step_numbers)
-        st.session_state.active_step = step_numbers[next_idx]
-        st.session_state.step_slider = step_numbers[next_idx]
-        time.sleep(0.6)
-        st.rerun()
 
     # Determine Active Step
     selected_step = st.session_state.active_step
@@ -491,7 +518,11 @@ def main():
     completed_trips = max(0, cumulative_injected - active_cars)
 
     # Active engine profile metadata
-    active_profile = ENGINE_METRICS.get(st.session_state.engine_choice, ENGINE_METRICS[ENGINE_OPTIONS[0]])
+    selected_engine = st.session_state.engine_choice
+    if selected_engine not in ENGINE_METRICS:
+        selected_engine = ENGINE_OPTIONS[0]
+        st.session_state.engine_choice = selected_engine
+    active_profile = ENGINE_METRICS[selected_engine]
 
     # 1. Top Executive Navigation Bar
     st.markdown(
@@ -572,28 +603,15 @@ def main():
         )
         
         # Row 1: Unified Playback Controls & Timeline Scrubber
-        t_col1, t_col2, t_col3, t_col4, t_col5, t_col6 = st.columns([0.7, 0.7, 1.0, 0.7, 0.8, 5.5])
+        t_col1, t_col2, t_col3, t_col4 = st.columns([0.8, 1.1, 0.8, 5.5])
         with t_col1:
-            st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), width="stretch")
+            st.button("◀ Prev", on_click=_step_prev, key="btn_prev", width="stretch")
         with t_col2:
-            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
-            prev_step = step_numbers[max(0, curr_idx - 1)]
-            st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), width="stretch")
-        with t_col3:
             play_label = "⏸ Pause" if st.session_state.is_playing else "▶ Play"
-            if st.button(play_label, width="stretch"):
-                st.session_state.is_playing = not st.session_state.is_playing
-                st.rerun()
+            st.button(play_label, on_click=_toggle_play, key="btn_play", width="stretch")
+        with t_col3:
+            st.button("Next ▶", on_click=_step_next, key="btn_next", width="stretch")
         with t_col4:
-            curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
-            next_step = step_numbers[min(len(step_numbers) - 1, curr_idx + 1)]
-            st.button("Next ▶", on_click=_jump_step, args=(next_step,), width="stretch")
-        with t_col5:
-            st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), width="stretch")
-        with t_col6:
-            def _on_slider_change():
-                st.session_state.active_step = st.session_state.step_slider
-
             st.select_slider(
                 "Simulation Timeline Step",
                 options=step_numbers,
@@ -699,7 +717,7 @@ def main():
     # TAB 2: Parallel Computing Benchmarks
     # -------------------------------------------------------------------------
     with tab2:
-        benchmarks = metrics_plotter.get_empirical_benchmarks()
+        benchmarks = metrics_plotter.load_benchmark_data()
         is_live = benchmarks.get("metadata", {}).get("is_live_data", False)
         
         status_text = "Live Benchmark Records Loaded" if is_live else "High-Performance Empirical Reference Data"
@@ -788,6 +806,18 @@ def main():
         st.markdown("### Execution Runtime & Latency Profile")
         fig_runtime = metrics_plotter.plot_runtime_comparison(benchmarks)
         st.plotly_chart(fig_runtime, width="stretch")
+
+    # Auto-play tick loop (executed after full render pass)
+    if st.session_state.is_playing:
+        time.sleep(0.8)
+        curr_step = st.session_state.active_step
+        next_idx = (step_numbers.index(curr_step) + 1) % len(step_numbers) if curr_step in step_numbers else 0
+        st.session_state.active_step = step_numbers[next_idx]
+        try:
+            st.session_state.step_slider = step_numbers[next_idx]
+        except Exception:
+            pass
+        st.rerun()
 
 
 if __name__ == "__main__":

@@ -259,7 +259,7 @@ class TestMetricsPlotter(unittest.TestCase):
         self.assertGreater(len(fig2.data), 0)
 
     def test_efficiency_and_runtime_figures(self):
-        """Verifies parallel efficiency and runtime bar chart generators."""
+        """Verifies parallel efficiency, GPU comparison, and runtime bar chart generators."""
         fig_eff = metrics_plotter.plot_efficiency_curves(self.benchmarks)
         self.assertIsNotNone(fig_eff)
         self.assertGreater(len(fig_eff.data), 0)
@@ -268,11 +268,22 @@ class TestMetricsPlotter(unittest.TestCase):
         self.assertIsNotNone(fig_rt)
         self.assertGreater(len(fig_rt.data), 0)
 
+        fig_gpu = metrics_plotter.plot_gpu_vs_cpu_comparison(self.benchmarks)
+        self.assertIsNotNone(fig_gpu)
+        self.assertGreaterEqual(fig_gpu.layout.margin.t, 80)
+        self.assertTrue(any("GPU Leap" in str(ann.text) for ann in fig_gpu.layout.annotations))
+
     def test_mpi_communication_overhead_figure(self):
-        """Verifies MPI communication overhead donut chart."""
+        """Verifies MPI communication overhead donut chart and radial percent styling."""
         fig_comm = metrics_plotter.plot_mpi_communication_overhead(self.benchmarks)
         self.assertIsNotNone(fig_comm)
         self.assertEqual(len(fig_comm.data), 1)
+        self.assertEqual(fig_comm.data[0].textinfo, "percent")
+        self.assertEqual(fig_comm.data[0].insidetextorientation, "radial")
+        self.assertGreaterEqual(fig_comm.layout.margin.t, 65)
+
+        fig_pie = metrics_plotter.plot_overhead_pie(self.benchmarks)
+        self.assertIsNotNone(fig_pie)
 
     def test_load_imbalance_figure(self):
         """Verifies MPI load imbalance bar chart generator."""
@@ -356,31 +367,34 @@ class TestDashboardStreamlitApp(unittest.TestCase):
         snap60_df = pd.read_csv("data/snapshots/snapshot_t60.csv")
         self.assertEqual(veh_metric.value, f"{int(snap60_df['vehicle_count'].sum()):,}")
 
-        # Test jump buttons (First, Next, Prev, Latest) execute without widget instantiation errors
-        btn_dict = {btn.label: btn for btn in at.button}
-        if "⏮ First" in btn_dict:
-            btn_dict["⏮ First"].click().run(timeout=30)
-            self.assertEqual(len(at.exception), 0)
-            self.assertEqual(at.session_state.active_step, 0)
-
+        # Test streamlined 4-element control deck (btn_prev, btn_play, btn_next, step_slider)
         available_steps = sorted([int(os.path.basename(f).replace("snapshot_t", "").replace(".csv", "")) for f in glob.glob("data/snapshots/snapshot_t*.csv")])
-        btn_dict = {btn.label: btn for btn in at.button}
-        if "Next ▶" in btn_dict and len(available_steps) > 1:
-            btn_dict["Next ▶"].click().run(timeout=30)
+
+        # Reset to t=0 using slider
+        at.select_slider[0].set_value(0)
+        at.run(timeout=30)
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(at.session_state.active_step, 0)
+
+        btn_key_dict = {btn.key: btn for btn in at.button}
+        self.assertIn("btn_prev", btn_key_dict)
+        self.assertIn("btn_play", btn_key_dict)
+        self.assertIn("btn_next", btn_key_dict)
+        self.assertEqual(btn_key_dict["btn_play"].label, "▶ Play")
+        self.assertFalse(at.session_state.is_playing)
+
+        # Test btn_next advances step
+        if "btn_next" in btn_key_dict and len(available_steps) > 1:
+            btn_key_dict["btn_next"].click().run(timeout=30)
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(at.session_state.active_step, available_steps[1])
 
-        btn_dict = {btn.label: btn for btn in at.button}
-        if "◀ Prev" in btn_dict:
-            btn_dict["◀ Prev"].click().run(timeout=30)
+        # Test btn_prev steps backward
+        btn_key_dict = {btn.key: btn for btn in at.button}
+        if "btn_prev" in btn_key_dict:
+            btn_key_dict["btn_prev"].click().run(timeout=30)
             self.assertEqual(len(at.exception), 0)
-            self.assertEqual(at.session_state.active_step, 0)
-
-        btn_dict = {btn.label: btn for btn in at.button}
-        if "Latest ⏭" in btn_dict and available_steps:
-            btn_dict["Latest ⏭"].click().run(timeout=30)
-            self.assertEqual(len(at.exception), 0)
-            self.assertEqual(at.session_state.active_step, max(available_steps))
+            self.assertEqual(at.session_state.active_step, available_steps[0])
 
     def test_streamlit_live_monitor_mode(self):
         """Verifies execution when switching to Live Simulation Monitor mode."""

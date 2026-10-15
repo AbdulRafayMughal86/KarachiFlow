@@ -41,7 +41,7 @@ def _apply_dark_theme(
     title: str,
     xaxis_title: str,
     yaxis_title: str,
-    legend_y: float = 1.02,
+    legend_y: float = -0.22,
 ) -> go.Figure:
     """Applies refined dark glassmorphism styling to a Plotly figure."""
     fig.update_layout(
@@ -66,17 +66,17 @@ def _apply_dark_theme(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor=PLOT_BG,
         legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=legend_y,
+            xanchor="center",
+            x=0.5,
             font=dict(color=COLOR_WHITE, size=11),
-            bgcolor=CONTAINER_BG,
+            bgcolor="rgba(16, 23, 38, 0.7)",
             bordercolor="rgba(255, 255, 255, 0.12)",
             borderwidth=1,
-            orientation="h",
-            yanchor="bottom",
-            y=legend_y,
-            xanchor="right",
-            x=1.0,
         ),
-        margin=dict(l=45, r=25, t=55, b=40),
+        margin=dict(l=50, r=30, t=55, b=65),
         hoverlabel=dict(
             bgcolor=DARK_BG,
             font_size=12,
@@ -746,9 +746,11 @@ def plot_gpu_vs_cpu_comparison(benchmarks: Dict[str, Any]) -> go.Figure:
     fig.add_annotation(
         text=f"<b>GPU Leap: {gpu_boost_vs_omp:.2f}× over OpenMP Peak</b>",
         xref="paper", yref="paper",
-        x=0.98, y=0.95,
+        x=0.98, y=0.90,
+        xanchor="right",
+        yanchor="middle",
         showarrow=False,
-        font=dict(color=COLOR_GPU, size=12),
+        font=dict(color=COLOR_GPU, size=11),
         bgcolor="rgba(118, 185, 0, 0.15)",
         bordercolor=COLOR_GPU,
         borderwidth=1,
@@ -759,17 +761,26 @@ def plot_gpu_vs_cpu_comparison(benchmarks: Dict[str, Any]) -> go.Figure:
             text="<b>GPU Acceleration Engine Performance: NVIDIA RTX 4000 Ada vs. CPU OpenMP</b>",
             font=dict(color=COLOR_WHITE, size=15),
             x=0.02,
-            y=0.96,
+            y=0.98,
         ),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor=PLOT_BG,
-        margin=dict(l=45, r=25, t=65, b=40),
+        margin=dict(l=50, r=30, t=80, b=45),
     )
 
+    for ann in fig.layout.annotations:
+        if ann.text in [
+            "<b>Cell Update Throughput (Mcells/s)</b>",
+            "<b>Speedup vs. CPU Sequential Baseline (Sp)</b>",
+        ]:
+            ann.font = dict(color=COLOR_WHITE, size=13)
+
+    max_tp = max(throughputs) if throughputs else 1.0
+    max_sp = max(speedups) if speedups else 1.0
     fig.update_xaxes(gridcolor=GRID_COLOR, tickfont=dict(color=COLOR_GRAY, size=10))
     fig.update_yaxes(gridcolor=GRID_COLOR, tickfont=dict(color=COLOR_GRAY, size=11))
-    fig.update_yaxes(title_text="Throughput (Mcells/s)", row=1, col=1)
-    fig.update_yaxes(title_text="Speedup Multiplier (Sp)", row=1, col=2)
+    fig.update_yaxes(title_text="Throughput (Mcells/s)", range=[0, max_tp * 1.20], row=1, col=1)
+    fig.update_yaxes(title_text="Speedup Multiplier (Sp)", range=[0, max_sp * 1.30], row=1, col=2)
 
     return fig
 
@@ -880,15 +891,17 @@ def plot_what_if_bottleneck_scenario(benchmarks: Dict[str, Any]) -> go.Figure:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor=PLOT_BG,
         legend=dict(
-            font=dict(color=COLOR_WHITE, size=10),
-            bgcolor=CONTAINER_BG,
             orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1.0,
+            yanchor="top",
+            y=-0.22,
+            xanchor="center",
+            x=0.5,
+            font=dict(color=COLOR_WHITE, size=11),
+            bgcolor="rgba(16, 23, 38, 0.7)",
+            bordercolor="rgba(255, 255, 255, 0.12)",
+            borderwidth=1,
         ),
-        margin=dict(l=45, r=25, t=65, b=40),
+        margin=dict(l=50, r=30, t=55, b=65),
     )
 
     fig.update_xaxes(title_text="Simulation Time (seconds)", gridcolor=GRID_COLOR, tickfont=dict(color=COLOR_GRAY, size=11))
@@ -961,7 +974,8 @@ def plot_mpi_communication_overhead(benchmarks: Dict[str, Any]) -> go.Figure:
         values=values,
         hole=0.58,
         marker=dict(colors=colors, line=dict(color=DARK_BG, width=2)),
-        textinfo="label+percent",
+        textinfo="percent",
+        insidetextorientation="radial",
         textfont=dict(color=COLOR_WHITE, size=12),
         hovertemplate="<b>%{label}</b><br>Time: %{value:.2f} ms (%{percent})<extra></extra>",
     )])
@@ -985,12 +999,15 @@ def plot_mpi_communication_overhead(benchmarks: Dict[str, Any]) -> go.Figure:
         legend=dict(
             font=dict(color=COLOR_WHITE, size=11),
             orientation="h",
-            yanchor="bottom",
-            y=-0.1,
+            yanchor="top",
+            y=-0.08,
             xanchor="center",
             x=0.5,
+            bgcolor="rgba(16, 23, 38, 0.7)",
+            bordercolor="rgba(255, 255, 255, 0.12)",
+            borderwidth=1,
         ),
-        margin=dict(l=20, r=20, t=50, b=30),
+        margin=dict(l=30, r=30, t=65, b=45),
     )
     return fig
 
@@ -1122,5 +1139,6 @@ def create_scaling_summary_table(benchmarks: Dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# Backward compatibility alias
+# Backward compatibility aliases
 plot_communication_overhead = plot_mpi_communication_overhead
+plot_overhead_pie = plot_mpi_communication_overhead
