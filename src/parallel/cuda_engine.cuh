@@ -76,6 +76,9 @@ public:
     void run();
 
     bool save_snapshot(uint32_t step, const std::string& filepath) const;
+    void capture_buffered_snapshot(uint32_t step);
+    void flush_buffered_snapshots();
+    const std::vector<BufferedSnapshot>& buffered_snapshots() const noexcept { return m_buffered_snapshots; }
     void sync_device_to_host();
 
     const SimulationConfig& config() const noexcept { return m_config; }
@@ -133,6 +136,9 @@ private:
     };
     std::vector<int32_t> m_host_claims;
     std::vector<HostVehicleIntent> m_host_intents;
+    std::vector<BufferedSnapshot> m_buffered_snapshots;
+    mutable std::vector<uint32_t> m_snapshot_counts;
+    mutable std::vector<uint32_t> m_snapshot_speeds;
 
     uint32_t m_current_step{0};
     uint32_t m_injected_vehicles{0};

@@ -313,12 +313,41 @@ def main():
         help="Network metadata JSON file (default: data/karachi_network_metadata.json)",
     )
     parser.add_argument(
+        "--tier",
+        choices=["tier1", "tier2", "tier3", "urban-core", "outer-skirts", "regional"],
+        default="tier1",
+        help="Geographic network tier: tier1/urban-core (Saddar-Shahrah-e-Faisal corridor, ~75k segments, ~1.08M cells), tier2/outer-skirts (Greater Karachi metropolitan), tier3/regional (Karachi + Outer Skirts + M-9 + Hyderabad mega-corridor)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Inspect execution plan without launching long simulation runs",
     )
 
     args = parser.parse_args()
+
+    # Geographic Tier Resolution
+    tier_map = {
+        "tier1": ("data/karachi_network.bin", "data/karachi_network_metadata.json", "Tier 1: Karachi Urban Core (~75k segments, ~1.08M cells)"),
+        "urban-core": ("data/karachi_network.bin", "data/karachi_network_metadata.json", "Tier 1: Karachi Urban Core (~75k segments, ~1.08M cells)"),
+        "tier2": ("data/karachi_outer_network.bin", "data/karachi_outer_network_metadata.json", "Tier 2: Outer Skirts / Greater Karachi"),
+        "outer-skirts": ("data/karachi_outer_network.bin", "data/karachi_outer_network_metadata.json", "Tier 2: Outer Skirts / Greater Karachi"),
+        "tier3": ("data/karachi_regional_network.bin", "data/karachi_regional_network_metadata.json", "Tier 3: Regional Mega-Corridor (Karachi + M-9 + Hyderabad)"),
+        "regional": ("data/karachi_regional_network.bin", "data/karachi_regional_network_metadata.json", "Tier 3: Regional Mega-Corridor (Karachi + M-9 + Hyderabad)"),
+    }
+    tier_bin, tier_meta, tier_desc = tier_map.get(args.tier, tier_map["tier1"])
+
+    # If user left --network / --metadata as defaults, apply the tier's designated paths
+    if args.network == "data/karachi_network.bin" and args.tier not in ["tier1", "urban-core"]:
+        args.network = tier_bin
+        args.metadata = tier_meta
+        if not Path(args.network).exists():
+            print(f"[WARN] Selected {tier_desc} binary not found at '{args.network}'.")
+            print(f"       Run 'python scripts/preprocess_graph.py --mode {'regional' if 'tier3' in args.tier or 'regional' in args.tier else 'full'}' to generate.")
+            print(f"       Falling back to Tier 1 Urban Core network for benchmark continuity.")
+            args.network = "data/karachi_network.bin"
+            args.metadata = "data/karachi_network_metadata.json"
+            tier_desc = "Tier 1: Karachi Urban Core (~75k segments, ~1.08M cells) [Fallback]"
 
     # Hardware profile detection
     hw = detect_hardware_profile()
@@ -376,10 +405,11 @@ def main():
         sys.exit(1)
 
     print("=" * 76)
-    print(" KarachiFlow — Performance Evaluation & Parallel Scaling Study")
+    print(" KarachiFlow - Performance Evaluation & Parallel Scaling Study")
     print("=" * 76)
     print(f"Target Binary:       {karachiflow_bin or 'DRY-RUN'}")
     print(f"Host Architecture:   {hw['cpu_cores']} CPU Cores | GPU: {hw['gpu_name']}")
+    print(f"Geographic Tier:     {tier_desc}")
     print(f"Workload Scale:      {args.scale.upper()} ({target_cars:,} vehicles, {steps} steps)")
     print(f"OpenMP Threads:      {threads_to_test}")
     print(f"MPI Processes:       {mpi_procs_to_test if not args.skip_mpi else 'Skipped'}")
@@ -478,7 +508,14 @@ def main():
     # -------------------------------------------------------------------------
     sched_threads = 4 if 4 in threads_to_test else threads_to_test[-1]
     print(f"\n3. Benchmarking OpenMP Scheduling Algorithms (at {sched_threads} Threads)...")
-    schedules = [("static", 64), ("dynamic", 64), ("guided", 64)]
+    schedules = [
+        ("static", 64),
+        ("dynamic", 16),
+        ("dynamic", 32),
+        ("dynamic", 64),
+        ("dynamic", 128),
+        ("guided", 64),
+    ]
     for sched, chunk in schedules:
         cmd_sched = [
             str(karachiflow_bin),
@@ -904,6 +941,8 @@ def main():
 
     full_summary = {
         "metadata": {
+            "tier": args.tier,
+            "tier_description": tier_desc,
             "scale": args.scale,
             "target_cars": target_cars,
             "steps": steps,

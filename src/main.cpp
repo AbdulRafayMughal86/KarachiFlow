@@ -50,6 +50,7 @@ int main(int argc, char* argv[]) {
     bool cars_set = false;
     bool steps_set = false;
     bool interval_set = false;
+    bool snapshots_set = false;
     bool use_sequential = false;
     bool run_benchmark = false;
     bool use_mpi = false;
@@ -100,6 +101,7 @@ int main(int argc, char* argv[]) {
             interval_set = true;
         } else if (arg == "--snapshots" && i + 1 < argc) {
             config.snapshot_dir = argv[++i];
+            snapshots_set = true;
         } else if (arg == "--network" && i + 1 < argc) {
             config.network_path = argv[++i];
         } else if (arg == "--metadata" && i + 1 < argc) {
@@ -127,8 +129,12 @@ int main(int argc, char* argv[]) {
         if (!interval_set) config.snapshot_interval = 30;
     }
 
-    if (run_benchmark && !interval_set) {
+    if (run_benchmark) {
         config.snapshot_interval = 0;
+    }
+
+    if ((config.seed_vehicles > 0 || config.seed_density > 0.0f) && !snapshots_set) {
+        config.snapshot_dir = "data/snapshots_seeded";
     }
 
     int mpi_rank = 0;
@@ -428,11 +434,8 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            const auto t_start = std::chrono::high_resolution_clock::now();
             bench_sim.run();
-            const auto t_end = std::chrono::high_resolution_clock::now();
-            const double run_ms = static_cast<double>(
-                std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count()) / 1000.0;
+            const double run_ms = bench_sim.metrics().total_sim_time_ms;
 
             if (t == 1) {
                 t1_baseline_ms = run_ms;

@@ -32,8 +32,12 @@ void HybridEngine::apply_omp_environment() {
 
 #if defined(_WIN32)
     _putenv_s("OMP_SCHEDULE", sched_str.c_str());
+    _putenv_s("OMP_PROC_BIND", "spread");
+    _putenv_s("OMP_PLACES", "cores");
 #else
     setenv("OMP_SCHEDULE", sched_str.c_str(), 1);
+    setenv("OMP_PROC_BIND", "spread", 0);
+    setenv("OMP_PLACES", "cores", 0);
 #endif
 
 #if _OPENMP >= 200805
@@ -1115,17 +1119,27 @@ void HybridEngine::run() {
     }
 
     const auto t_start = std::chrono::high_resolution_clock::now();
+    double io_time_ms = 0.0;
 
     for (uint32_t s = 1; s <= m_config.total_steps; ++s) {
         step();
         if (m_config.snapshot_interval > 0 && (s % m_config.snapshot_interval == 0)) {
+            const auto io_start = std::chrono::high_resolution_clock::now();
             const std::string snapshot_path = m_config.snapshot_dir + "/snapshot_t" + std::to_string(s) + ".csv";
             save_snapshot(s, snapshot_path);
+#if defined(HAS_MPI) || defined(MPI_VERSION)
+            if (m_total_ranks > 1) {
+                MPI_Barrier(MPI_COMM_WORLD);
+            }
+#endif
+            const auto io_end = std::chrono::high_resolution_clock::now();
+            io_time_ms += std::chrono::duration<double, std::milli>(io_end - io_start).count();
         }
     }
 
     const auto t_end = std::chrono::high_resolution_clock::now();
-    m_metrics.total_sim_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    m_metrics.total_sim_time_ms = std::max(0.0, elapsed_ms - io_time_ms);
     m_metrics.comm_wait_time_ms = m_accumulated_comm_wait_ms;
     m_metrics.compute_time_ms = std::max(0.0, m_metrics.total_sim_time_ms - m_metrics.comm_wait_time_ms);
     m_metrics.comm_to_compute_ratio = (m_metrics.total_sim_time_ms > 0.0)

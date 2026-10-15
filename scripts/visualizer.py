@@ -28,7 +28,7 @@ COLOR_FREE_FLOW = [0, 230, 118, 245]       # Vibrant Neon Green: v >= 0.70 vmax,
 COLOR_MODERATE = [255, 214, 0, 245]        # Bright Amber Yellow: 0.35 vmax <= v < 0.70 vmax or 0.25 <= density < 0.45
 COLOR_BOTTLENECK = [255, 23, 68, 255]      # Vivid Glowing Crimson Red: 0.05 vmax < v < 0.35 vmax or 0.45 <= density < 0.65
 COLOR_DEADLOCK = [255, 0, 128, 255]        # Vivid Electric Magenta/Ruby: Standstill Gridlock / Deadlock (v <= 0.05, n >= 2, rho >= 0.65)
-COLOR_INACTIVE = [50, 60, 80, 50]          # Faint subtle slate: No active vehicles
+COLOR_INACTIVE = [65, 88, 120, 130]        # Crisp steel-slate blue: Open, connected road network grid
 
 # Zone boundary colors (RGBA) — Thin crisp outlines without blocking fills
 COLOR_RESIDENTIAL_ZONE = [0, 210, 255, 180]  # Crisp Neon Cyan outline
@@ -90,8 +90,8 @@ def load_network_geometry(bin_path: str, metadata_path: str) -> Tuple[pd.DataFra
         "lanes": segments["lanes"].astype(np.int16),
         "cells_per_lane": segments["cells_per_lane"].astype(np.int16),
         "speed_limit": segments["speed_limit"].astype(np.int16),
-        "speed_limit_kmh": (segments["speed_limit"] * KMH_PER_CELL_PER_SEC).astype(np.float32),
-        "length_meters": segments["length_meters"].astype(np.float32),
+        "speed_limit_kmh": np.round(segments["speed_limit"] * KMH_PER_CELL_PER_SEC, 1).astype(np.float32),
+        "length_meters": np.round(segments["length_meters"], 1).astype(np.float32),
         "total_cells": (segments["lanes"] * segments["cells_per_lane"]).astype(np.int32),
         "start_lon": start_lons.astype(np.float64),
         "start_lat": start_lats.astype(np.float64),
@@ -133,6 +133,7 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     merged["avg_speed_kmh"] = (merged["avg_speed"] * KMH_PER_CELL_PER_SEC).round(1)
     merged["density_pct"] = (merged["density_ratio"] * 100.0).round(1)
     merged["length_meters"] = merged["length_meters"].round(1)
+    merged["speed_limit_kmh"] = merged["speed_limit_kmh"].round(1)
 
     v_max = np.maximum(merged["speed_limit"].values, 1)
     speed_ratio = np.clip(merged["avg_speed"].values / v_max, 0.0, 1.0)
@@ -370,6 +371,10 @@ def build_traffic_deck(
     else:  # Complete Road Network (74k segments)
         render_df = merged_df.copy()
 
+    # Ensure inactive open roads render first and active traffic renders on top
+    if not render_df.empty and "vehicle_count" in render_df.columns:
+        render_df = render_df.sort_values(by="vehicle_count", ascending=True)
+
     # Optional uniform width override
     if not scale_widths and not render_df.empty:
         render_df["line_width"] = 1.8
@@ -464,7 +469,7 @@ def build_traffic_deck(
     # Tooltip configuration for interactive segment inspection (Compact HUD)
     tooltip = {
         "html": """
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; font-size: 11px; line-height: 1.4; color: #f8fafc; background: rgba(16, 23, 38, 0.94); padding: 7px 11px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 16px rgba(0,0,0,0.5); backdrop-filter: blur(8px); max-width: 230px; pointer-events: none;">
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif; font-size: 11px; line-height: 1.4; color: #f8fafc; background: rgba(16, 23, 38, 0.94); padding: 7px 11px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 16px rgba(0,0,0,0.5); backdrop-filter: blur(8px); max-width: 230px; box-sizing: border-box; overflow: hidden; contain: layout style; word-break: break-word; pointer-events: none;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px;">
                 <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 700; font-size: 11px; color: #38bdf8;">SEG #{segment_id}</span>
                 <span style="font-size: 10px; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.08); color: #cbd5e1;">Lanes: {lanes}</span>
@@ -483,6 +488,9 @@ def build_traffic_deck(
             "border": "none",
             "transform": "translate(12px, 12px)",
             "zIndex": "99999",
+            "maxWidth": "240px",
+            "overflow": "hidden",
+            "pointerEvents": "none",
         }
     }
 

@@ -36,6 +36,18 @@ struct SimulationMetrics {
     float avg_network_speed{0.0f};
 };
 
+struct SnapshotRecord {
+    int32_t segment_id{0};
+    uint32_t vehicle_count{0};
+    float avg_speed{0.0f};
+    float density_ratio{0.0f};
+};
+
+struct BufferedSnapshot {
+    uint32_t step{0};
+    std::vector<SnapshotRecord> records;
+};
+
 class Simulation {
 public:
     Simulation() = default;
@@ -45,6 +57,9 @@ public:
     void run();
 
     bool save_snapshot(uint32_t step, const std::string& filepath) const;
+    void capture_buffered_snapshot(uint32_t step);
+    void flush_buffered_snapshots();
+    const std::vector<BufferedSnapshot>& buffered_snapshots() const noexcept { return m_buffered_snapshots; }
 
     const SimulationConfig& config() const noexcept { return m_config; }
     const SimulationMetrics& metrics() const noexcept { return m_metrics; }
@@ -85,6 +100,7 @@ private:
 
     mutable std::vector<uint32_t> m_snapshot_counts;
     mutable std::vector<uint32_t> m_snapshot_speeds;
+    std::vector<BufferedSnapshot> m_buffered_snapshots;
 
     uint32_t m_current_step{0};
     uint32_t m_active_vehicle_count{0};

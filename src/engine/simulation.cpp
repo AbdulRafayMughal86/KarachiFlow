@@ -487,27 +487,93 @@ void Simulation::update_metrics() {
     }
 }
 
+void Simulation::capture_buffered_snapshot(uint32_t step) {
+    const uint32_t seg_count = m_network.segment_count();
+    std::fill(m_snapshot_counts.begin(), m_snapshot_counts.end(), 0);
+    std::fill(m_snapshot_speeds.begin(), m_snapshot_speeds.end(), 0);
+
+    for (uint32_t i = 0; i < m_injected_vehicles; ++i) {
+        const auto& v = m_vehicles[i];
+        if (v.active && v.segment_id >= 0 && static_cast<uint32_t>(v.segment_id) < seg_count) {
+            m_snapshot_counts[v.segment_id]++;
+            m_snapshot_speeds[v.segment_id] += v.velocity;
+        }
+    }
+
+    BufferedSnapshot snap;
+    snap.step = step;
+    snap.records.resize(seg_count);
+
+    for (uint32_t s = 0; s < seg_count; ++s) {
+        const auto& seg = m_segments[s];
+        const uint32_t cnt = m_snapshot_counts[s];
+        const float avg_spd = (cnt > 0) ? (static_cast<float>(m_snapshot_speeds[s]) / static_cast<float>(cnt)) : 0.0f;
+        const size_t total_c = seg.total_cells();
+        const float density = (total_c > 0) ? (static_cast<float>(cnt) / static_cast<float>(total_c)) : 0.0f;
+        snap.records[s] = {seg.id(), cnt, avg_spd, density};
+    }
+
+    m_buffered_snapshots.push_back(std::move(snap));
+}
+
+void Simulation::flush_buffered_snapshots() {
+    if (m_buffered_snapshots.empty()) return;
+
+    std::error_code ec;
+    std::filesystem::create_directories(m_config.snapshot_dir, ec);
+
+    char line_buf[128];
+    for (const auto& snap : m_buffered_snapshots) {
+        const std::string path = m_config.snapshot_dir + "/snapshot_t" + std::to_string(snap.step) + ".csv";
+        FILE* fp = std::fopen(path.c_str(), "w");
+        if (!fp) continue;
+
+        std::vector<char> io_buffer(262144);
+        std::setvbuf(fp, io_buffer.data(), _IOFBF, io_buffer.size());
+
+        std::fputs("segment_id,vehicle_count,avg_speed,density_ratio\n", fp);
+        for (const auto& rec : snap.records) {
+            if (rec.vehicle_count == 0) {
+                std::snprintf(line_buf, sizeof(line_buf), "%d,0,0.0000,0.0000\n", rec.segment_id);
+            } else {
+                std::snprintf(line_buf, sizeof(line_buf), "%d,%u,%.4f,%.4f\n",
+                              rec.segment_id, rec.vehicle_count, rec.avg_speed, rec.density_ratio);
+            }
+            std::fputs(line_buf, fp);
+        }
+        std::fclose(fp);
+    }
+    m_buffered_snapshots.clear();
+}
+
 void Simulation::run() {
+    m_buffered_snapshots.clear();
     if (m_config.snapshot_interval > 0) {
-        save_snapshot(0, m_config.snapshot_dir + "/snapshot_t0.csv");
+        capture_buffered_snapshot(0);
     }
 
     const auto t_start = std::chrono::high_resolution_clock::now();
+    double snap_time_ms = 0.0;
 
     for (uint32_t s = 1; s <= m_config.total_steps; ++s) {
         step();
 
         if (m_config.snapshot_interval > 0 && (s % m_config.snapshot_interval == 0)) {
-            const std::string snapshot_path = m_config.snapshot_dir + "/snapshot_t" + std::to_string(s) + ".csv";
-            save_snapshot(s, snapshot_path);
+            const auto snap_t0 = std::chrono::high_resolution_clock::now();
+            capture_buffered_snapshot(s);
+            const auto snap_t1 = std::chrono::high_resolution_clock::now();
+            snap_time_ms += std::chrono::duration<double, std::milli>(snap_t1 - snap_t0).count();
         }
     }
 
     const auto t_end = std::chrono::high_resolution_clock::now();
-    m_metrics.total_sim_time_ms = static_cast<double>(
+    const double elapsed_ms = static_cast<double>(
         std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count()) / 1000.0;
+    m_metrics.total_sim_time_ms = std::max(0.0, elapsed_ms - snap_time_ms);
 
     update_metrics();
+
+    flush_buffered_snapshots();
 }
 
 bool Simulation::save_snapshot(uint32_t /*step*/, const std::string& filepath) const {

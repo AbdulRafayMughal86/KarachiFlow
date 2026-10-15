@@ -41,11 +41,8 @@ int main() {
     std::string err_msg;
     check_condition(seq_sim.initialize(config, &err_msg), "Baseline init error: " + err_msg);
 
-    const auto t_seq_start = std::chrono::high_resolution_clock::now();
     seq_sim.run();
-    const auto t_seq_end = std::chrono::high_resolution_clock::now();
-    const double t1_baseline_ms = static_cast<double>(
-        std::chrono::duration_cast<std::chrono::microseconds>(t_seq_end - t_seq_start).count()) / 1000.0;
+    const double t1_baseline_ms = seq_sim.metrics().total_sim_time_ms;
 
     std::cout << "   Baseline execution time (T1): " << std::fixed << std::setprecision(2)
               << t1_baseline_ms << " ms\n";
@@ -132,7 +129,10 @@ int main() {
 
     const std::vector<ScheduleTest> schedules = {
         {"Static",  karachiflow::OpenMPSchedule::Static,  64},
+        {"Dynamic", karachiflow::OpenMPSchedule::Dynamic, 16},
+        {"Dynamic", karachiflow::OpenMPSchedule::Dynamic, 32},
         {"Dynamic", karachiflow::OpenMPSchedule::Dynamic, 64},
+        {"Dynamic", karachiflow::OpenMPSchedule::Dynamic, 128},
         {"Guided",  karachiflow::OpenMPSchedule::Guided,  64}
     };
 
@@ -151,11 +151,8 @@ int main() {
 
         karachiflow::OpenMPEngine omp_sim;
         omp_sim.initialize(bench_config, omp_cfg);
-        const auto t_start = std::chrono::high_resolution_clock::now();
         omp_sim.run();
-        const auto t_end = std::chrono::high_resolution_clock::now();
-        bench_t1_ms = static_cast<double>(
-            std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count()) / 1000.0;
+        bench_t1_ms = omp_sim.metrics().total_sim_time_ms;
     }
 
     for (int t : test_threads) {
@@ -168,11 +165,8 @@ int main() {
             karachiflow::OpenMPEngine omp_sim;
             omp_sim.initialize(bench_config, omp_cfg);
 
-            const auto t_start = std::chrono::high_resolution_clock::now();
             omp_sim.run();
-            const auto t_end = std::chrono::high_resolution_clock::now();
-            const double tp_ms = static_cast<double>(
-                std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count()) / 1000.0;
+            const double tp_ms = omp_sim.metrics().total_sim_time_ms;
 
             const double sp = (tp_ms > 0.0) ? (bench_t1_ms / tp_ms) : 1.0;
             const double ep = sp / static_cast<double>(t);
@@ -211,11 +205,8 @@ int main() {
     check_condition(dev_sim.initialize(dev_config, dev_omp_cfg, &err_msg),
                     "Dev test initialization failed: " + err_msg);
 
-    const auto t_dev_start = std::chrono::high_resolution_clock::now();
     dev_sim.run();
-    const auto t_dev_end = std::chrono::high_resolution_clock::now();
-    const double dev_runtime_ms = static_cast<double>(
-        std::chrono::duration_cast<std::chrono::microseconds>(t_dev_end - t_dev_start).count()) / 1000.0;
+    const double dev_runtime_ms = dev_sim.metrics().total_sim_time_ms;
 
     std::cout << "   Multi-threaded developer mode runtime (5,000 cars, 60s, 4 threads): "
               << std::fixed << std::setprecision(2) << dev_runtime_ms << " ms\n";

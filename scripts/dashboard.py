@@ -327,49 +327,72 @@ def main():
         st.warning("⚠️ No simulation snapshots found in `data/snapshots/`. Launch a run with `.\\bin\\karachiflow.exe --dev`.")
         return
 
-    # Engine architecture profiles and performance metadata
+    # Load dynamic benchmark dataset with empirical reference fallback
+    benchmarks = metrics_plotter.get_empirical_benchmarks()
+    hyb_bench = benchmarks.get("hybrid", {})
+    omp_bench = benchmarks.get("openmp", {})
+    mpi_bench = benchmarks.get("mpi", {})
+    cuda_bench = benchmarks.get("cuda", {})
+    seq_bench = benchmarks.get("sequential", {})
+
+    hyb_sp = max(hyb_bench.get("speedup_vs_seq", [8.29])) if hyb_bench.get("speedup_vs_seq") else 8.29
+    omp_sp = max(omp_bench.get("speedup_vs_seq", [7.57])) if omp_bench.get("speedup_vs_seq") else 7.57
+    mpi_sp = max(mpi_bench.get("speedup_vs_seq", [7.48])) if mpi_bench.get("speedup_vs_seq") else 7.48
+    cuda_sp = cuda_bench.get("speedup_vs_seq", 14.10) if isinstance(cuda_bench.get("speedup_vs_seq"), (int, float)) else 14.10
+    seq_sp = 1.00
+
+    hyb_tp = max(hyb_bench.get("throughput_mcells", [182.4])) if hyb_bench.get("throughput_mcells") else 182.4
+    omp_tp = max(omp_bench.get("throughput_mcells", [166.5])) if omp_bench.get("throughput_mcells") else 166.5
+    mpi_tp = max(mpi_bench.get("throughput_mcells", [164.6])) if mpi_bench.get("throughput_mcells") else 164.6
+    cuda_tp = cuda_bench.get("throughput_mcells", 310.2) if isinstance(cuda_bench.get("throughput_mcells"), (int, float)) else 310.2
+    seq_tp = seq_bench.get("throughput_mcells", 22.0) if isinstance(seq_bench.get("throughput_mcells"), (int, float)) else 22.0
+
+    hyb_eff = max(hyb_bench.get("efficiency_self", [1.036])) if hyb_bench.get("efficiency_self") else 1.036
+    omp_eff = omp_bench.get("efficiency_self", [0.946])[-1] if omp_bench.get("efficiency_self") else 0.946
+    mpi_eff = mpi_bench.get("efficiency_self", [0.935])[-1] if mpi_bench.get("efficiency_self") else 0.935
+
     ENGINE_OPTIONS = [
-        "Hybrid MS-MPI + OpenMP (Peak 8.29×)",
-        "OpenMP Multi-Core 8T (7.57×)",
-        "Distributed MS-MPI 4R (7.48×)",
+        f"Hybrid MS-MPI + OpenMP (Peak {hyb_sp:.2f}×)",
+        f"OpenMP Multi-Core 8T ({omp_sp:.2f}×)",
+        f"Distributed MS-MPI 4R ({mpi_sp:.2f}×)",
         "CUDA RTX 4000 Ada (sm_89)",
         "Sequential Baseline T1",
     ]
 
     ENGINE_METRICS = {
-        "Hybrid MS-MPI + OpenMP (Peak 8.29×)": {
-            "speedup": "8.29×",
-            "chip": "⚡ Hybrid MPI+OpenMP 8.29×",
+        ENGINE_OPTIONS[0]: {
+            "speedup": f"{hyb_sp:.2f}×",
+            "chip": f"⚡ Hybrid MPI+OpenMP {hyb_sp:.2f}×",
             "desc": "MPI (4 ranks) + OpenMP (2 threads)",
-            "throughput": "182.4 Mcells/s",
-            "efficiency": "103.6%",
+            "throughput": f"{hyb_tp:.1f} Mcells/s",
+            "efficiency": f"{hyb_eff * 100.0:.1f}%",
         },
-        "OpenMP Multi-Core 8T (7.57×)": {
-            "speedup": "7.57×",
-            "chip": "⚡ OpenMP 8T 7.57×",
+        ENGINE_OPTIONS[1]: {
+            "speedup": f"{omp_sp:.2f}×",
+            "chip": f"⚡ OpenMP 8T {omp_sp:.2f}×",
             "desc": "Shared-Memory OpenMP 8 Threads",
-            "throughput": "166.5 Mcells/s",
-            "efficiency": "94.6%",
+            "throughput": f"{omp_tp:.1f} Mcells/s",
+            "efficiency": f"{omp_eff * 100.0:.1f}%",
         },
-        "Distributed MS-MPI 4R (7.48×)": {
-            "speedup": "7.48×",
-            "chip": "⚡ MS-MPI 4R 7.48×",
+        ENGINE_OPTIONS[2]: {
+            "speedup": f"{mpi_sp:.2f}×",
+            "chip": f"⚡ MS-MPI 4R {mpi_sp:.2f}×",
             "desc": "Domain Decomposition 4 Ranks",
-            "throughput": "164.6 Mcells/s",
-            "efficiency": "93.5%",
+            "throughput": f"{mpi_tp:.1f} Mcells/s",
+            "efficiency": f"{mpi_eff * 100.0:.1f}%",
         },
-        "CUDA RTX 4000 Ada (sm_89)": {
-            "speedup": "14.10×",
-            "chip": "⚡ CUDA RTX 4000 Ada 14.1×",
+        ENGINE_OPTIONS[3]: {
+            "speedup": f"{cuda_sp:.2f}×",
+            "chip": f"⚡ CUDA RTX 4000 Ada {cuda_sp:.1f}×",
             "desc": "Massively Parallel GPU Kernels",
-            "throughput": "310.2 Mcells/s",
+            "throughput": f"{cuda_tp:.1f} Mcells/s",
             "efficiency": "N/A (GPU Acceleration)",
         },
-        "Sequential Baseline T1": {
+        ENGINE_OPTIONS[4]: {
             "speedup": "1.00×",
             "chip": "⏱ Sequential 1.00×",
             "desc": "Single-Thread Reference Baseline",
-            "throughput": "22.0 Mcells/s",
+            "throughput": f"{seq_tp:.1f} Mcells/s",
             "efficiency": "100.0%",
         },
     }
@@ -377,6 +400,8 @@ def main():
     # Initialize Session State
     if "active_step" not in st.session_state:
         st.session_state.active_step = step_numbers[-1]
+    if "step_slider" not in st.session_state:
+        st.session_state.step_slider = step_numbers[-1]
     if "is_playing" not in st.session_state:
         st.session_state.is_playing = False
     if "corridor_preset" not in st.session_state:
@@ -452,6 +477,15 @@ def main():
     network_occupancy = (active_cars / metadata["counts"]["total_cells"]) * 100.0
 
     total_target_vehicles = 5000
+    meta_path = "data/snapshots/snapshot_metadata.json"
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as mf:
+                s_meta = json.load(mf)
+                total_target_vehicles = int(s_meta.get("total_vehicles", 5000))
+        except Exception:
+            pass
+    total_target_vehicles = max(total_target_vehicles, active_cars)
     max_step = max(step_numbers[-1], 1)
     cumulative_injected = min(total_target_vehicles, int(round(total_target_vehicles * (selected_step / max_step))))
     completed_trips = max(0, cumulative_injected - active_cars)
@@ -517,7 +551,7 @@ def main():
             show_heatmap=st.session_state.show_heatmap,
             highlight_deadlocks=st.session_state.highlight_deadlocks,
         )
-        st.pydeck_chart(deck, use_container_width=True, height=490)
+        st.pydeck_chart(deck, width="stretch", height=490)
 
         # Integrated Simulation Transport & Layer Deck (Unified Dock)
         st.markdown(
@@ -540,22 +574,22 @@ def main():
         # Row 1: Unified Playback Controls & Timeline Scrubber
         t_col1, t_col2, t_col3, t_col4, t_col5, t_col6 = st.columns([0.7, 0.7, 1.0, 0.7, 0.8, 5.5])
         with t_col1:
-            st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), use_container_width=True)
+            st.button("⏮ First", on_click=_jump_step, args=(step_numbers[0],), width="stretch")
         with t_col2:
             curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
             prev_step = step_numbers[max(0, curr_idx - 1)]
-            st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), use_container_width=True)
+            st.button("◀ Prev", on_click=_jump_step, args=(prev_step,), width="stretch")
         with t_col3:
             play_label = "⏸ Pause" if st.session_state.is_playing else "▶ Play"
-            if st.button(play_label, use_container_width=True):
+            if st.button(play_label, width="stretch"):
                 st.session_state.is_playing = not st.session_state.is_playing
                 st.rerun()
         with t_col4:
             curr_idx = step_numbers.index(selected_step) if selected_step in step_numbers else 0
             next_step = step_numbers[min(len(step_numbers) - 1, curr_idx + 1)]
-            st.button("Next ▶", on_click=_jump_step, args=(next_step,), use_container_width=True)
+            st.button("Next ▶", on_click=_jump_step, args=(next_step,), width="stretch")
         with t_col5:
-            st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), use_container_width=True)
+            st.button("Latest ⏭", on_click=_jump_step, args=(step_numbers[-1],), width="stretch")
         with t_col6:
             def _on_slider_change():
                 st.session_state.active_step = st.session_state.step_slider
@@ -651,7 +685,7 @@ def main():
                     ],
                 }
                 summary_df = pd.DataFrame(dist_data)
-                st.dataframe(summary_df, use_container_width=True)
+                st.dataframe(summary_df, width="stretch")
             with t_col2:
                 st.markdown("**Top Critical Congestion & Deadlock Hotspots**")
                 hotspots = (
@@ -659,7 +693,7 @@ def main():
                     .sort_values(by=["density_ratio", "vehicle_count"], ascending=[False, False])
                     .head(10)[["segment_id", "lanes", "vehicle_count", "avg_speed_kmh", "density_pct", "congestion_status"]]
                 )
-                st.dataframe(hotspots, use_container_width=True)
+                st.dataframe(hotspots, width="stretch")
 
     # -------------------------------------------------------------------------
     # TAB 2: Parallel Computing Benchmarks
@@ -709,22 +743,22 @@ def main():
         b_col1, b_col2 = st.columns(2)
         with b_col1:
             fig_sp = metrics_plotter.plot_speedup_curves(benchmarks, "Speedup vs Sequential Baseline")
-            st.plotly_chart(fig_sp, use_container_width=True)
+            st.plotly_chart(fig_sp, width="stretch")
         with b_col2:
             fig_eff = metrics_plotter.plot_efficiency_curves(benchmarks)
-            st.plotly_chart(fig_eff, use_container_width=True)
+            st.plotly_chart(fig_eff, width="stretch")
 
         b_col3, b_col4 = st.columns(2)
         with b_col3:
             fig_gpu = metrics_plotter.plot_gpu_vs_cpu_comparison(benchmarks)
-            st.plotly_chart(fig_gpu, use_container_width=True)
+            st.plotly_chart(fig_gpu, width="stretch")
         with b_col4:
             fig_overhead = metrics_plotter.plot_mpi_communication_overhead(benchmarks)
-            st.plotly_chart(fig_overhead, use_container_width=True)
+            st.plotly_chart(fig_overhead, width="stretch")
 
         st.markdown("### Executive Performance Summary Matrix")
         summary_table = metrics_plotter.create_scaling_summary_table(benchmarks)
-        st.dataframe(summary_table, use_container_width=True)
+        st.dataframe(summary_table, width="stretch")
 
     # -------------------------------------------------------------------------
     # TAB 3: What-If Incident Simulation & Physics
@@ -745,15 +779,15 @@ def main():
         w_col1, w_col2 = st.columns(2)
         with w_col1:
             fig_whatif = metrics_plotter.plot_what_if_bottleneck_scenario(benchmarks)
-            st.plotly_chart(fig_whatif, use_container_width=True)
+            st.plotly_chart(fig_whatif, width="stretch")
         with w_col2:
             fig_weak = metrics_plotter.plot_weak_scaling_curves(benchmarks)
-            st.plotly_chart(fig_weak, use_container_width=True)
+            st.plotly_chart(fig_weak, width="stretch")
 
         # Execution Runtime Comparison
         st.markdown("### Execution Runtime & Latency Profile")
         fig_runtime = metrics_plotter.plot_runtime_comparison(benchmarks)
-        st.plotly_chart(fig_runtime, use_container_width=True)
+        st.plotly_chart(fig_runtime, width="stretch")
 
 
 if __name__ == "__main__":

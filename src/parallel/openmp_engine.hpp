@@ -35,6 +35,8 @@ struct alignas(64) ThreadWorkspace {
     std::vector<BoundaryCandidate> boundary_candidates;
     uint64_t cell_updates{0};
     uint64_t total_velocity{0};
+    uint32_t velocity_count{0};
+    double step_latency_us{0.0};
     char cache_padding[64];
 };
 
@@ -49,6 +51,9 @@ public:
     void run();
 
     bool save_snapshot(uint32_t step, const std::string& filepath) const;
+    void capture_buffered_snapshot(uint32_t step);
+    void flush_buffered_snapshots();
+    const std::vector<BufferedSnapshot>& buffered_snapshots() const noexcept { return m_buffered_snapshots; }
 
     const SimulationConfig& config() const noexcept { return m_config; }
     const OpenMPConfig& omp_config() const noexcept { return m_omp_config; }
@@ -93,6 +98,7 @@ private:
 
     mutable std::vector<uint32_t> m_snapshot_counts;
     mutable std::vector<uint32_t> m_snapshot_speeds;
+    std::vector<BufferedSnapshot> m_buffered_snapshots;
 
     std::vector<ThreadWorkspace> m_thread_workspaces;
     std::vector<BoundaryCandidate> m_merged_candidates;

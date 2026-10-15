@@ -7,6 +7,7 @@
 #include <cstring>
 #include <queue>
 #include <limits>
+#include <filesystem>
 
 #if defined(__CUDACC__)
 #include <cuda_runtime.h>
@@ -119,9 +120,11 @@ __global__ void evaluate_intent_kernel(
 
     if (speed > d_seg) {
         int32_t to_node = d_seg_to_node[seg_id];
-        if (dest_zone >= 0 && dest_zone < dest_zone_count && to_node >= 0 && to_node < node_count) {
-            size_t dest_idx = static_cast<size_t>(to_node) * dest_zone_count + dest_zone;
-            if (d_is_dest_node[dest_idx] != 0) {
+        if (to_node >= 0 && to_node < static_cast<int32_t>(node_count)) {
+            uint32_t eff_zones = (dest_zone_count > 0) ? dest_zone_count : 1;
+            uint32_t z = (dest_zone >= 0 && dest_zone < static_cast<int32_t>(dest_zone_count)) ? static_cast<uint32_t>(dest_zone) : 0;
+            size_t dest_idx = static_cast<size_t>(to_node) * eff_zones + z;
+            if (dest_zone_count > 0 && d_is_dest_node[dest_idx] != 0) {
                 trip_completed = true;
             } else {
                 next_seg_id = d_routing_table[dest_idx];
@@ -469,9 +472,10 @@ void CudaEngine::precompute_routing_tables() {
         }
     }
 
-    for (uint32_t z = 0; z < m_dest_zone_count; ++z) {
+    const uint32_t eff_zones = std::max(1u, m_dest_zone_count);
+    for (uint32_t z = 0; z < eff_zones; ++z) {
         for (uint32_t u = 0; u < n_nodes; ++u) {
-            const size_t idx = static_cast<size_t>(u) * m_dest_zone_count + z;
+            const size_t idx = static_cast<size_t>(u) * eff_zones + z;
             if (m_is_dest_node[idx] == 0 && m_routing_table[idx] < 0) {
                 auto [out_segs, out_count] = m_network.get_outgoing_segments(static_cast<int32_t>(u));
                 if (out_count > 0) {
@@ -585,6 +589,9 @@ bool CudaEngine::initialize(const SimulationConfig& config, std::string* error_m
     m_active_vehicle_count = 0;
     m_completed_vehicles = 0;
     m_metrics = CudaMetrics{};
+
+    m_snapshot_counts.assign(m_segments.size(), 0);
+    m_snapshot_speeds.assign(m_segments.size(), 0);
 
     seed_interior_vehicles();
 
@@ -761,6 +768,13 @@ void CudaEngine::step() {
                 }
             }
 
+            if (!trip_completed && next_seg_id < 0 && to_node >= 0) {
+                auto [out_segs, out_count] = m_network.get_outgoing_segments(to_node);
+                if (out_count > 0) {
+                    next_seg_id = out_segs[0];
+                }
+            }
+
             if (!trip_completed && next_seg_id >= 0) {
                 const auto& next_seg = m_segments[next_seg_id];
                 next_lane = std::min(lane, static_cast<int16_t>(next_seg.lanes() - 1));
@@ -889,23 +903,101 @@ void CudaEngine::sync_device_to_host() {
 #endif
 }
 
+void CudaEngine::capture_buffered_snapshot(uint32_t step) {
+    const size_t seg_count = m_segments.size();
+    std::fill(m_snapshot_counts.begin(), m_snapshot_counts.end(), 0);
+    std::fill(m_snapshot_speeds.begin(), m_snapshot_speeds.end(), 0);
+
+    for (uint32_t i = 0; i < m_injected_vehicles; ++i) {
+        const auto& v = m_vehicles[i];
+        if (v.active && v.segment_id >= 0 && static_cast<size_t>(v.segment_id) < seg_count) {
+            m_snapshot_counts[v.segment_id]++;
+            m_snapshot_speeds[v.segment_id] += v.velocity;
+        }
+    }
+
+    BufferedSnapshot snap;
+    snap.step = step;
+    snap.records.resize(seg_count);
+
+    for (size_t s = 0; s < seg_count; ++s) {
+        const auto& seg = m_segments[s];
+        const uint32_t n_cars = m_snapshot_counts[s];
+        const float avg_v = (n_cars > 0) ? (static_cast<float>(m_snapshot_speeds[s]) / n_cars) : 0.0f;
+        const size_t total_c = seg.total_cells();
+        const float density = (total_c > 0) ? (static_cast<float>(n_cars) / total_c) : 0.0f;
+
+        snap.records[s] = {seg.id(), n_cars, avg_v, density};
+    }
+
+    m_buffered_snapshots.push_back(std::move(snap));
+}
+
+void CudaEngine::flush_buffered_snapshots() {
+    if (m_buffered_snapshots.empty()) return;
+
+    std::error_code ec;
+    std::filesystem::create_directories(m_config.snapshot_dir, ec);
+
+    char line_buf[128];
+    for (const auto& snap : m_buffered_snapshots) {
+        const std::string path = m_config.snapshot_dir + "/snapshot_t" + std::to_string(snap.step) + ".csv";
+        FILE* fp = std::fopen(path.c_str(), "w");
+        if (!fp) continue;
+
+        std::vector<char> io_buffer(262144);
+        std::setvbuf(fp, io_buffer.data(), _IOFBF, io_buffer.size());
+
+        std::fputs("segment_id,vehicle_count,avg_speed,density_ratio\n", fp);
+        for (const auto& rec : snap.records) {
+            if (rec.vehicle_count == 0) {
+                std::snprintf(line_buf, sizeof(line_buf), "%d,0,0.0000,0.0000\n", rec.segment_id);
+            } else {
+                std::snprintf(line_buf, sizeof(line_buf), "%d,%u,%.4f,%.4f\n",
+                              rec.segment_id, rec.vehicle_count, rec.avg_speed, rec.density_ratio);
+            }
+            std::fputs(line_buf, fp);
+        }
+        std::fclose(fp);
+    }
+    m_buffered_snapshots.clear();
+}
+
 void CudaEngine::run() {
+    m_buffered_snapshots.clear();
+    if (m_config.snapshot_interval > 0) {
+        capture_buffered_snapshot(0);
+    }
+
     const auto t_start = std::chrono::high_resolution_clock::now();
+    double snap_time_ms = 0.0;
+
     for (uint32_t s = 1; s <= m_config.total_steps; ++s) {
         step();
         if (m_config.snapshot_interval > 0 && (s % m_config.snapshot_interval == 0)) {
+            const auto snap_t0 = std::chrono::high_resolution_clock::now();
             sync_device_to_host();
-            const std::string path = m_config.snapshot_dir + "/snapshot_t" + std::to_string(s) + ".csv";
-            save_snapshot(s, path);
+            capture_buffered_snapshot(s);
+            const auto snap_t1 = std::chrono::high_resolution_clock::now();
+            snap_time_ms += std::chrono::duration<double, std::milli>(snap_t1 - snap_t0).count();
         }
     }
-    sync_device_to_host();
+
+#if defined(__CUDACC__)
+    CUDA_CALL(cudaDeviceSynchronize());
+#endif
     const auto t_end = std::chrono::high_resolution_clock::now();
-    m_metrics.total_sim_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    m_metrics.total_sim_time_ms = std::max(0.0, elapsed_ms - snap_time_ms);
     m_metrics.steps_executed = m_current_step;
     if (m_metrics.total_sim_time_ms > 0.0) {
         m_metrics.updates_per_second = (static_cast<double>(m_metrics.total_cell_updates) / (m_metrics.total_sim_time_ms / 1000.0));
+        m_metrics.avg_step_time_us = (m_metrics.total_sim_time_ms * 1000.0) / std::max(1u, m_current_step);
     }
+    sync_device_to_host();
+    update_metrics();
+
+    flush_buffered_snapshots();
 }
 
 void CudaEngine::update_metrics() {
@@ -923,6 +1015,9 @@ void CudaEngine::update_metrics() {
         }
     }
     m_metrics.avg_network_speed = (count > 0) ? static_cast<float>(total_speed / count) : 0.0f;
+    if (m_metrics.total_sim_time_ms > 0.0) {
+        m_metrics.avg_step_time_us = (m_metrics.total_sim_time_ms * 1000.0) / std::max(1u, m_current_step);
+    }
 }
 
 bool CudaEngine::save_snapshot(uint32_t step, const std::string& filepath) const {
@@ -933,21 +1028,21 @@ bool CudaEngine::save_snapshot(uint32_t step, const std::string& filepath) const
     out << "segment_id,vehicle_count,avg_speed,density_ratio\n";
     const size_t seg_count = m_segments.size();
 
-    std::vector<uint32_t> counts(seg_count, 0);
-    std::vector<uint64_t> speeds(seg_count, 0);
+    std::fill(m_snapshot_counts.begin(), m_snapshot_counts.end(), 0);
+    std::fill(m_snapshot_speeds.begin(), m_snapshot_speeds.end(), 0);
 
     for (uint32_t i = 0; i < m_injected_vehicles; ++i) {
         const auto& v = m_vehicles[i];
         if (v.active && v.segment_id >= 0 && static_cast<size_t>(v.segment_id) < seg_count) {
-            counts[v.segment_id]++;
-            speeds[v.segment_id] += v.velocity;
+            m_snapshot_counts[v.segment_id]++;
+            m_snapshot_speeds[v.segment_id] += v.velocity;
         }
     }
 
     for (size_t s = 0; s < seg_count; ++s) {
         const auto& seg = m_segments[s];
-        const uint32_t n_cars = counts[s];
-        const float avg_v = (n_cars > 0) ? (static_cast<float>(speeds[s]) / n_cars) : 0.0f;
+        const uint32_t n_cars = m_snapshot_counts[s];
+        const float avg_v = (n_cars > 0) ? (static_cast<float>(m_snapshot_speeds[s]) / n_cars) : 0.0f;
         const size_t total_c = seg.total_cells();
         const float density = (total_c > 0) ? (static_cast<float>(n_cars) / total_c) : 0.0f;
 
