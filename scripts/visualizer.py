@@ -34,6 +34,83 @@ COLOR_INACTIVE = [65, 88, 120, 130]        # Crisp steel-slate blue: Open, conne
 COLOR_RESIDENTIAL_ZONE = [0, 210, 255, 180]  # Crisp Neon Cyan outline
 COLOR_COMMERCIAL_ZONE = [255, 150, 0, 180]   # Warm Amber outline
 
+# Columns required by the PyDeck LineLayer and tooltip
+LINE_LAYER_COLUMNS = [
+    "start_lon",
+    "start_lat",
+    "end_lon",
+    "end_lat",
+    "color",
+    "line_width",
+    "segment_id",
+    "lanes",
+    "congestion_status",
+    "vehicle_count",
+    "avg_speed_kmh",
+    "density_pct",
+    "length_meters",
+    "speed_limit_kmh",
+]
+
+
+class FastDeck(pdk.Deck):
+    """
+    High-performance PyDeck Deck subclass that pre-serializes and caches its JSON representation in RAM.
+    Eliminates redundant multi-second serialization during timeline scrubbing and state updates.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cached_json: Optional[str] = None
+        self._cached_json = super().to_json()
+
+    def to_json(self) -> str:
+        if self._cached_json is None:
+            self._cached_json = super().to_json()
+        return self._cached_json
+
+
+# Module-level in-memory cache for PyDeck Deck instances across timesteps
+_DECK_CACHE: Dict[Tuple, FastDeck] = {}
+
+
+def clear_deck_cache() -> None:
+    """Clears the in-memory PyDeck Deck frame cache."""
+    _DECK_CACHE.clear()
+
+
+def get_cached_traffic_deck(
+    merged_df: pd.DataFrame,
+    metadata: Dict[str, Any],
+    view_state: pdk.ViewState,
+    display_mode: str = "Major Arteries + Active Traffic",
+    show_zones: bool = False,
+    show_heatmap: bool = False,
+    highlight_deadlocks: bool = True,
+    scale_widths: bool = True,
+    cache_key: Optional[Tuple] = None,
+) -> FastDeck:
+    """
+    Returns a cached FastDeck from RAM if available, or constructs, pre-serializes,
+    and caches a new FastDeck for instantaneous (< 1 ms) playback.
+    """
+    if cache_key is not None and cache_key in _DECK_CACHE:
+        return _DECK_CACHE[cache_key]
+
+    deck = build_traffic_deck(
+        merged_df=merged_df,
+        metadata=metadata,
+        view_state=view_state,
+        display_mode=display_mode,
+        show_zones=show_zones,
+        show_heatmap=show_heatmap,
+        highlight_deadlocks=highlight_deadlocks,
+        scale_widths=scale_widths,
+    )
+
+    if cache_key is not None:
+        _DECK_CACHE[cache_key] = deck
+    return deck
+
 
 def load_network_geometry(bin_path: str, metadata_path: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
@@ -90,8 +167,8 @@ def load_network_geometry(bin_path: str, metadata_path: str) -> Tuple[pd.DataFra
         "lanes": segments["lanes"].astype(np.int16),
         "cells_per_lane": segments["cells_per_lane"].astype(np.int16),
         "speed_limit": segments["speed_limit"].astype(np.int16),
-        "speed_limit_kmh": np.round(segments["speed_limit"] * KMH_PER_CELL_PER_SEC, 1).astype(np.float32),
-        "length_meters": np.round(segments["length_meters"], 1).astype(np.float32),
+        "speed_limit_kmh": np.round(segments["speed_limit"] * KMH_PER_CELL_PER_SEC, 1).astype(np.float64),
+        "length_meters": np.round(segments["length_meters"].astype(np.float64), 1).astype(np.float64),
         "total_cells": (segments["lanes"] * segments["cells_per_lane"]).astype(np.int32),
         "start_lon": start_lons.astype(np.float64),
         "start_lat": start_lats.astype(np.float64),
@@ -129,11 +206,11 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     merged["avg_speed"] = merged["avg_speed"].fillna(0.0).astype(float)
     merged["density_ratio"] = merged["density_ratio"].fillna(0.0).astype(float)
 
-    # Derived physics indicators
-    merged["avg_speed_kmh"] = (merged["avg_speed"] * KMH_PER_CELL_PER_SEC).round(1)
-    merged["density_pct"] = (merged["density_ratio"] * 100.0).round(1)
-    merged["length_meters"] = merged["length_meters"].round(1)
-    merged["speed_limit_kmh"] = merged["speed_limit_kmh"].round(1)
+    # Derived physics indicators sanitized to 64-bit precision rounded to 1 decimal place
+    merged["avg_speed_kmh"] = np.round((merged["avg_speed"] * KMH_PER_CELL_PER_SEC).astype(np.float64), 1)
+    merged["density_pct"] = np.round((merged["density_ratio"] * 100.0).astype(np.float64), 1)
+    merged["length_meters"] = np.round(merged["length_meters"].astype(np.float64), 1)
+    merged["speed_limit_kmh"] = np.round(merged["speed_limit_kmh"].astype(np.float64), 1)
 
     v_max = np.maximum(merged["speed_limit"].values, 1)
     speed_ratio = np.clip(merged["avg_speed"].values / v_max, 0.0, 1.0)
@@ -142,27 +219,34 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
 
     # 4-Tier Traffic Physics & Deadlock Detection:
     # 1. STANDSTILL GRIDLOCK / DEADLOCK (Magenta):
-    #    speed <= 0.05 vmax AND vehicle_count >= 2 AND density >= 0.65
+    #    Multiple vehicles (cars >= 2) jammed at high density (density >= 0.65) and near zero speed (speed <= 0.05 vmax)
     is_gridlock = (cars >= 2) & (density >= 0.65) & (speed_ratio <= 0.05)
 
     # 2. Severe Bottleneck / Queue (Crimson Red):
-    #    (0.05 vmax < speed < 0.35 vmax) OR (0.45 <= density < 0.65) OR residual low-speed/high-density
-    is_bottleneck = (cars > 0) & (~is_gridlock) & (
-        ((speed_ratio > 0.05) & (speed_ratio < 0.35)) |
+    #    Requires multiple vehicles (cars >= 2) AND elevated density (density >= 0.35) along with low speed (speed_ratio < 0.35),
+    #    or elevated congestion density (density >= 0.45). A single vehicle can NEVER form a bottleneck.
+    is_bottleneck = (cars >= 2) & (~is_gridlock) & (
+        ((speed_ratio < 0.35) & (density >= 0.35)) |
         ((density >= 0.45) & (density < 0.65)) |
-        (speed_ratio <= 0.05) |
         (density >= 0.65)
     )
 
-    # 3. Moderate Slowing (Bright Amber):
-    #    (0.35 vmax <= speed < 0.70 vmax) OR (0.25 <= density < 0.45)
-    is_moderate = (cars > 0) & (~is_gridlock) & (~is_bottleneck) & (
+    # 3. Moderate Flow / Slowing (Bright Amber):
+    #    - Single vehicle stopped or yielding at intersection (v <= 0.05 vmax)
+    #    - Multiple vehicles with moderate speed (0.35 <= speed_ratio < 0.70) or moderate density (0.25 <= density < 0.45)
+    #    - Multiple vehicles with low speed but low density (non-queue slowing)
+    single_stopped = (cars == 1) & (speed_ratio <= 0.05)
+    multi_moderate = (cars >= 2) & (~is_gridlock) & (~is_bottleneck) & (
         ((speed_ratio >= 0.35) & (speed_ratio < 0.70)) |
-        ((density >= 0.25) & (density < 0.45))
+        ((density >= 0.25) & (density < 0.45)) |
+        (speed_ratio < 0.35)
     )
+    is_moderate = single_stopped | multi_moderate
 
     # 4. Free Flow (Neon Green):
-    #    speed >= 0.70 vmax AND density < 0.25
+    #    - Single moving vehicle (cars == 1 and speed_ratio > 0.05)
+    #    - Multiple vehicles at high speed (speed_ratio >= 0.70) and low density (density < 0.25)
+    #    - Any remaining active vehicles not classified above
     is_free_flow = (cars > 0) & (~is_gridlock) & (~is_bottleneck) & (~is_moderate)
 
     status_list = np.full(len(merged), "Empty Road", dtype=object)
@@ -379,6 +463,11 @@ def build_traffic_deck(
     if not scale_widths and not render_df.empty:
         render_df["line_width"] = 1.8
 
+    # Column pruning: Drop all unused attributes before PyDeck serialization
+    if not render_df.empty:
+        active_cols = [c for c in LINE_LAYER_COLUMNS if c in render_df.columns]
+        render_df = render_df[active_cols].copy()
+
     # 1. Base layer: Origin / Destination zone bounding polygon layer
     if show_zones:
         zone_polygons = build_zone_polygons(metadata)
@@ -426,6 +515,8 @@ def build_traffic_deck(
             (merged_df["congestion_status"] == "Standstill Gridlock (Deadlock)")
         ]
         if not deadlock_df.empty:
+            deadlock_cols = [c for c in LINE_LAYER_COLUMNS if c in deadlock_df.columns]
+            deadlock_df = deadlock_df[deadlock_cols].copy()
             deadlock_layer = pdk.Layer(
                 "LineLayer",
                 data=deadlock_df,
@@ -494,7 +585,7 @@ def build_traffic_deck(
         }
     }
 
-    deck = pdk.Deck(
+    deck = FastDeck(
         layers=layers,
         initial_view_state=view_state,
         map_style=pdk.map_styles.CARTO_DARK,

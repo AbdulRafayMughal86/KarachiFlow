@@ -229,6 +229,29 @@ class TestGeospatialVisualizer(unittest.TestCase):
         self.assertEqual(merged.loc[3, "color"], visualizer.COLOR_DEADLOCK)
         self.assertIsInstance(merged.loc[3, "color"], list)
 
+        # Single vehicle rule verification: cars == 1 must NEVER be severe bottleneck (red)
+        single_car_data = pd.DataFrame({
+            "segment_id": base_seg["segment_id"].values[:2],
+            "vehicle_count": [1, 1],
+            "avg_speed": [0.0, base_seg["speed_limit"].values[1] * 0.85],
+            "density_ratio": [0.02, 0.02],
+        })
+        merged_single = visualizer.merge_telemetry(base_seg.iloc[:2].copy(), single_car_data)
+        # Stopped single vehicle -> Moderate Flow (Slowing), Bright Amber
+        self.assertEqual(merged_single.loc[0, "congestion_status"], "Moderate Flow (Slowing)")
+        self.assertEqual(merged_single.loc[0, "color"], visualizer.COLOR_MODERATE)
+        self.assertNotEqual(merged_single.loc[0, "color"], visualizer.COLOR_BOTTLENECK)
+        # Moving single vehicle -> Free Flow (Normal), Neon Green
+        self.assertEqual(merged_single.loc[1, "congestion_status"], "Free Flow (Normal)")
+        self.assertEqual(merged_single.loc[1, "color"], visualizer.COLOR_FREE_FLOW)
+        self.assertNotEqual(merged_single.loc[1, "color"], visualizer.COLOR_BOTTLENECK)
+
+        # Tooltip float precision sanitization verification
+        for col in ["length_meters", "speed_limit_kmh", "avg_speed_kmh", "density_pct"]:
+            val_str = str(merged_single.loc[0, col])
+            if "." in val_str:
+                self.assertLessEqual(len(val_str.split(".")[1]), 2)
+
 
 class TestMetricsPlotter(unittest.TestCase):
     """Unit tests for PDC benchmark curves and figure generators."""
@@ -396,21 +419,27 @@ class TestDashboardStreamlitApp(unittest.TestCase):
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(at.session_state.active_step, available_steps[0])
 
-    def test_streamlit_live_monitor_mode(self):
-        """Verifies execution when switching to Live Simulation Monitor mode."""
+    def test_streamlit_engine_switching_isolation(self):
+        """Verifies switching execution architecture updates metrics without map reload errors."""
         from streamlit.testing.v1 import AppTest
 
         dashboard_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "dashboard.py"))
         at = AppTest.from_file(dashboard_path)
         at.run(timeout=30)
 
-        mode_radios = [r for r in at.radio if "Operation Mode" in r.label]
-        self.assertGreater(len(mode_radios), 0)
-        mode_radios[0].set_value("Live Simulation Monitor")
-        at.run(timeout=30)
+        self.assertEqual(len(at.exception), 0)
+        # Verify engine selector is present and can switch architectures
+        engine_selects = [s for s in at.selectbox if "Execution Architecture" in s.label]
+        self.assertGreater(len(engine_selects), 0)
+
+        # Switch to CUDA architecture
+        cuda_opt = [opt for opt in engine_selects[0].options if "CUDA" in opt][0]
+        engine_selects[0].set_value(cuda_opt).run(timeout=30)
 
         self.assertEqual(len(at.exception), 0)
         self.assertGreaterEqual(len(at.metric), 6)
+        speedup_metric = [m for m in at.metric if "Peak Speedup" in m.label][0]
+        self.assertIn("×", speedup_metric.value)
 
 
 

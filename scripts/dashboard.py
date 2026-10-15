@@ -201,6 +201,10 @@ st.markdown(
         font-size: 0.74rem !important;
         font-weight: 500 !important;
         font-family: "JetBrains Mono", Consolas, monospace !important;
+        color: #94a3b8 !important;
+    }
+    div[data-testid="metric-container"] div[data-testid="stMetricDelta"] svg {
+        display: none !important;
     }
 
     /* 7. Floating Media & Command Dock */
@@ -268,10 +272,6 @@ st.markdown(
         font-weight: 600 !important;
         color: #cbd5e1 !important;
     }
-    div[data-testid="stRadio"] label {
-        font-size: 0.76rem !important;
-        color: #cbd5e1 !important;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -294,6 +294,14 @@ def get_cached_network_geometry() -> Tuple[pd.DataFrame, Dict[str, Any]]:
 def get_cached_snapshot(snapshot_path: str) -> pd.DataFrame:
     """Loads and caches a single microscopic simulation snapshot."""
     return visualizer.load_snapshot(snapshot_path)
+
+
+@st.cache_data(show_spinner=False)
+def get_cached_merged_telemetry(snapshot_path: str) -> pd.DataFrame:
+    """Loads snapshot and merges with cached road network geometry."""
+    network_df, _ = get_cached_network_geometry()
+    snapshot_df = get_cached_snapshot(snapshot_path)
+    return visualizer.merge_telemetry(network_df, snapshot_df)
 
 
 def discover_available_snapshots() -> Tuple[List[int], Dict[int, str]]:
@@ -419,8 +427,6 @@ def main():
         st.session_state.corridor_preset = "Metropolitan Overview"
     if "engine_choice" not in st.session_state or st.session_state.engine_choice not in ENGINE_METRICS:
         st.session_state.engine_choice = ENGINE_OPTIONS[0]
-    if "operation_mode" not in st.session_state:
-        st.session_state.operation_mode = "Historical Replay"
     if "display_mode" not in st.session_state:
         st.session_state.display_mode = "Major Arteries + Active Traffic"
     if "show_zones" not in st.session_state:
@@ -462,13 +468,6 @@ def main():
         st.session_state.is_playing = False
         st.session_state.active_step = st.session_state.step_slider
 
-    # Live simulation monitor synchronization
-    if st.session_state.get("op_mode_radio") == "Live Simulation Monitor":
-        latest_step = step_numbers[-1]
-        if st.session_state.active_step != latest_step:
-            st.session_state.active_step = latest_step
-            st.session_state.step_slider = latest_step
-
     # Determine Active Step
     selected_step = st.session_state.active_step
     if selected_step not in step_to_path:
@@ -479,10 +478,9 @@ def main():
     if "step_slider" not in st.session_state or st.session_state.step_slider != selected_step:
         st.session_state.step_slider = selected_step
 
-    # Load and merge active snapshot telemetry
+    # Load and merge active snapshot telemetry via cache
     active_snapshot_path = step_to_path[selected_step]
-    snapshot_df = get_cached_snapshot(active_snapshot_path)
-    merged_df = visualizer.merge_telemetry(network_df, snapshot_df)
+    merged_df = get_cached_merged_telemetry(active_snapshot_path)
 
     # Compute Core Executive Metrics
     active_cars = int(merged_df["vehicle_count"].sum())
@@ -545,17 +543,17 @@ def main():
     # 2. Executive Metric Ribbon (6 High-Impact Telemetry Cards)
     kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
     with kpi_col1:
-        st.metric("🚗 Active Vehicles", f"{active_cars:,}", f"{network_occupancy:.1f}% network capacity")
+        st.metric("🚗 Active Vehicles", f"{active_cars:,}", f"{network_occupancy:.1f}% network capacity", delta_color="off")
     with kpi_col2:
-        st.metric("🏁 Completed Trips", f"{completed_trips:,}", f"{(completed_trips / max(total_target_vehicles, 1)) * 100:.1f}% completed")
+        st.metric("🏁 Completed Trips", f"{completed_trips:,}", f"{(completed_trips / max(total_target_vehicles, 1)) * 100:.1f}% completed", delta_color="off")
     with kpi_col3:
-        st.metric("⚡ Network Average Speed", f"{avg_speed_kmh:.1f} km/h", f"{avg_speed_cells:.2f} cells/s")
+        st.metric("⚡ Network Average Speed", f"{avg_speed_kmh:.1f} km/h", f"{avg_speed_cells:.2f} cells/s", delta_color="off")
     with kpi_col4:
-        st.metric("📊 Jam Density", f"{jam_density_pct:.1f}%", f"{congested_count:,} congested segments")
+        st.metric("📊 Jam Density", f"{jam_density_pct:.1f}%", f"{congested_count:,} congested segments", delta_color="off")
     with kpi_col5:
-        st.metric("🛑 Detected Deadlocks", f"{deadlock_count:,}", f"{(deadlock_count / max(active_segments, 1)) * 100:.1f}% of active")
+        st.metric("🛑 Detected Deadlocks", f"{deadlock_count:,}", f"{(deadlock_count / max(active_segments, 1)) * 100:.1f}% of active", delta_color="off")
     with kpi_col6:
-        st.metric("🚀 Peak Speedup", active_profile["speedup"], active_profile["desc"])
+        st.metric("🚀 Peak Speedup", active_profile["speedup"], active_profile["desc"], delta_color="off")
 
     # 3. Main Stage Presentation Tabs
     tab1, tab2, tab3 = st.tabs([
@@ -571,16 +569,26 @@ def main():
         # PyDeck WebGL Map
         viewports = visualizer.get_viewport_presets(metadata)
         active_viewport = viewports.get(st.session_state.corridor_preset, viewports["Metropolitan Overview"])
-        
-        deck = visualizer.build_traffic_deck(
+
+        deck_cache_key = (
+            selected_step,
+            st.session_state.corridor_preset,
+            st.session_state.display_mode,
+            st.session_state.show_zones,
+            st.session_state.show_heatmap,
+            st.session_state.highlight_deadlocks,
+            st.session_state.scale_widths,
+        )
+        deck = visualizer.get_cached_traffic_deck(
             merged_df=merged_df,
             metadata=metadata,
             view_state=active_viewport,
-            show_zones=st.session_state.show_zones,
             display_mode=st.session_state.display_mode,
-            scale_widths=st.session_state.scale_widths,
+            show_zones=st.session_state.show_zones,
             show_heatmap=st.session_state.show_heatmap,
             highlight_deadlocks=st.session_state.highlight_deadlocks,
+            scale_widths=st.session_state.scale_widths,
+            cache_key=deck_cache_key,
         )
         st.pydeck_chart(deck, width="stretch", height=490)
 
@@ -621,16 +629,8 @@ def main():
                 label_visibility="collapsed",
             )
 
-        # Row 2: Mode, Architecture, Corridor Focus, and Filter Selectors
-        c_mode, c_engine, c_corridor, c_filter = st.columns([2.0, 2.5, 2.3, 2.4])
-        with c_mode:
-            st.radio(
-                "Operation Mode",
-                ["Historical Replay", "Live Simulation Monitor"],
-                horizontal=True,
-                label_visibility="collapsed",
-                key="op_mode_radio",
-            )
+        # Row 2: Architecture, Corridor Focus, and Filter Selectors
+        c_engine, c_corridor, c_filter = st.columns([1.1, 1.0, 1.0])
         with c_engine:
             def _on_engine_change():
                 st.session_state.engine_choice = st.session_state.engine_select
