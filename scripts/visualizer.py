@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 import pandas as pd
 import pydeck as pdk
+import pydeck.bindings.json_tools as jt
 
 # Magic bytes and header size for the flat binary road network format
 MAGIC_BYTES = b"KFLW"
@@ -55,22 +56,26 @@ LINE_LAYER_COLUMNS = [
 
 class FastDeck(pdk.Deck):
     """
-    High-performance PyDeck Deck subclass that pre-serializes and caches its JSON representation in RAM.
+    High-performance PyDeck Deck subclass that pre-serializes and caches its compact JSON representation in RAM.
     Eliminates redundant multi-second serialization during timeline scrubbing and state updates.
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._cached_json: Optional[str] = None
-        self._cached_json = super().to_json()
+        self._cached_json = self._serialize_compact()
+
+    def _serialize_compact(self) -> str:
+        return json.dumps(self, default=jt.default_serialize, separators=(",", ":"))
 
     def to_json(self) -> str:
         if self._cached_json is None:
-            self._cached_json = super().to_json()
+            self._cached_json = self._serialize_compact()
         return self._cached_json
 
 
 # Module-level in-memory cache for PyDeck Deck instances across timesteps
 _DECK_CACHE: Dict[Tuple, FastDeck] = {}
+MAX_DECK_CACHE_ENTRIES = 32
 
 
 def clear_deck_cache() -> None:
@@ -108,6 +113,8 @@ def get_cached_traffic_deck(
     )
 
     if cache_key is not None:
+        if len(_DECK_CACHE) >= MAX_DECK_CACHE_ENTRIES:
+            _DECK_CACHE.pop(next(iter(_DECK_CACHE)))
         _DECK_CACHE[cache_key] = deck
     return deck
 
@@ -223,22 +230,20 @@ def merge_telemetry(network_df: pd.DataFrame, snapshot_df: pd.DataFrame) -> pd.D
     is_gridlock = (cars >= 2) & (density >= 0.65) & (speed_ratio <= 0.05)
 
     # 2. Severe Bottleneck / Queue (Crimson Red):
-    #    Requires multiple vehicles (cars >= 2) AND elevated density (density >= 0.35) along with low speed (speed_ratio < 0.35),
-    #    or elevated congestion density (density >= 0.45). A single vehicle can NEVER form a bottleneck.
+    #    Requires multiple vehicles (cars >= 2) AND elevated density (density >= 0.35) along with low speed (speed_ratio < 0.35).
+    #    A single vehicle can NEVER form a bottleneck.
     is_bottleneck = (cars >= 2) & (~is_gridlock) & (
-        ((speed_ratio < 0.35) & (density >= 0.35)) |
-        ((density >= 0.45) & (density < 0.65)) |
-        (density >= 0.65)
+        (speed_ratio < 0.35) & (density >= 0.35)
     )
 
     # 3. Moderate Flow / Slowing (Bright Amber):
     #    - Single vehicle stopped or yielding at intersection (v <= 0.05 vmax)
-    #    - Multiple vehicles with moderate speed (0.35 <= speed_ratio < 0.70) or moderate density (0.25 <= density < 0.45)
-    #    - Multiple vehicles with low speed but low density (non-queue slowing)
+    #    - Multiple vehicles with moderate speed (0.35 <= speed_ratio < 0.70) or elevated density (density >= 0.25)
+    #    - Multiple vehicles with low speed but low density (non-queue slowing, density < 0.35)
     single_stopped = (cars == 1) & (speed_ratio <= 0.05)
     multi_moderate = (cars >= 2) & (~is_gridlock) & (~is_bottleneck) & (
         ((speed_ratio >= 0.35) & (speed_ratio < 0.70)) |
-        ((density >= 0.25) & (density < 0.45)) |
+        (density >= 0.25) |
         (speed_ratio < 0.35)
     )
     is_moderate = single_stopped | multi_moderate

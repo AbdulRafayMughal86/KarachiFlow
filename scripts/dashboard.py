@@ -10,6 +10,7 @@ import os
 import glob
 import json
 import time
+import threading
 from typing import Dict, List, Tuple, Any, Optional
 
 import numpy as np
@@ -320,6 +321,50 @@ def discover_available_snapshots() -> Tuple[List[int], Dict[int, str]]:
     return sorted_steps, step_to_path
 
 
+def _prewarm_deck_worker(step_to_path_items: Tuple[Tuple[int, str], ...]):
+    """Background worker pre-warming simulation playback frames into RAM."""
+    try:
+        network_df, metadata = get_cached_network_geometry()
+        viewports = visualizer.get_viewport_presets(metadata)
+        default_viewport = viewports.get("Metropolitan Overview")
+        for step, path in step_to_path_items:
+            key = (
+                step,
+                "Metropolitan Overview",
+                "Major Arteries + Active Traffic",
+                False,
+                False,
+                True,
+                True,
+            )
+            if key not in visualizer._DECK_CACHE:
+                try:
+                    snap_df = visualizer.load_snapshot(path)
+                    m_df = visualizer.merge_telemetry(network_df, snap_df)
+                    visualizer.get_cached_traffic_deck(
+                        merged_df=m_df,
+                        metadata=metadata,
+                        view_state=default_viewport,
+                        cache_key=key,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+@st.cache_resource(show_spinner=False)
+def start_background_deck_prewarm(step_items_tuple: Tuple[Tuple[int, str], ...]) -> bool:
+    """Spawns a single background thread on startup to pre-warm DeckGL frames into RAM."""
+    worker_thread = threading.Thread(
+        target=_prewarm_deck_worker,
+        args=(step_items_tuple,),
+        daemon=True,
+    )
+    worker_thread.start()
+    return True
+
+
 def main():
     # Verify prerequisites
     if not os.path.exists(BIN_PATH) or not os.path.exists(METADATA_PATH):
@@ -335,6 +380,9 @@ def main():
     if not step_numbers:
         st.warning("⚠️ No simulation snapshots found in `data/snapshots/`. Launch a run with `.\\bin\\karachiflow.exe --dev`.")
         return
+
+    # Trigger background pre-warming of simulation frames into RAM (runs once via cache_resource)
+    start_background_deck_prewarm(tuple(sorted(step_to_path.items())))
 
     # Load dynamic benchmark dataset with empirical reference fallback
     benchmarks = metrics_plotter.load_benchmark_data()

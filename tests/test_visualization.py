@@ -252,6 +252,46 @@ class TestGeospatialVisualizer(unittest.TestCase):
             if "." in val_str:
                 self.assertLessEqual(len(val_str.split(".")[1]), 2)
 
+        # Multi-vehicle edge cases: Low speed without elevated density is slowing, not bottleneck
+        multi_low_density_data = pd.DataFrame({
+            "segment_id": [base_seg["segment_id"].values[0]],
+            "vehicle_count": [3],
+            "avg_speed": [base_seg["speed_limit"].values[0] * 0.15],
+            "density_ratio": [0.08],
+        })
+        merged_multi_low_den = visualizer.merge_telemetry(base_seg.iloc[:1].copy(), multi_low_density_data)
+        self.assertEqual(merged_multi_low_den.loc[0, "congestion_status"], "Moderate Flow (Slowing)")
+        self.assertEqual(merged_multi_low_den.loc[0, "color"], visualizer.COLOR_MODERATE)
+        self.assertNotEqual(merged_multi_low_den.loc[0, "color"], visualizer.COLOR_BOTTLENECK)
+
+        # Multi-vehicle edge cases: High speed at elevated density is NOT bottleneck
+        multi_high_speed_data = pd.DataFrame({
+            "segment_id": [base_seg["segment_id"].values[0]],
+            "vehicle_count": [4],
+            "avg_speed": [base_seg["speed_limit"].values[0] * 0.85],
+            "density_ratio": [0.50],
+        })
+        merged_multi_high_spd = visualizer.merge_telemetry(base_seg.iloc[:1].copy(), multi_high_speed_data)
+        self.assertNotEqual(merged_multi_high_spd.loc[0, "congestion_status"], "Severe Bottleneck (Queue)")
+        self.assertNotEqual(merged_multi_high_spd.loc[0, "color"], visualizer.COLOR_BOTTLENECK)
+
+    def test_bounded_deck_cache_eviction(self):
+        """Verifies that in-memory frame cache enforces bounded capacity without leaks."""
+        visualizer.clear_deck_cache()
+        net_df, meta = visualizer.load_network_geometry(self.bin_path, self.metadata_path)
+        view = visualizer.get_viewport_presets(meta)["Metropolitan Overview"]
+        dummy_snap = pd.DataFrame({
+            "segment_id": net_df["segment_id"].values[:10],
+            "vehicle_count": [0] * 10,
+            "avg_speed": [0.0] * 10,
+            "density_ratio": [0.0] * 10,
+        })
+        m = visualizer.merge_telemetry(net_df.iloc[:10].copy(), dummy_snap)
+        for i in range(visualizer.MAX_DECK_CACHE_ENTRIES + 10):
+            visualizer.get_cached_traffic_deck(m, meta, view, cache_key=(f"test_step_{i}",))
+        self.assertLessEqual(len(visualizer._DECK_CACHE), visualizer.MAX_DECK_CACHE_ENTRIES)
+        visualizer.clear_deck_cache()
+
 
 class TestMetricsPlotter(unittest.TestCase):
     """Unit tests for PDC benchmark curves and figure generators."""
