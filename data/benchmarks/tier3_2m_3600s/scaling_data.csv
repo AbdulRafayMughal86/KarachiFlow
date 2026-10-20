@@ -1,0 +1,21 @@
+category,label,tier,cars,steps,workers,threads,ranks,sim_time_ms,speedup,efficiency,cell_update_rate,active_vehicles,completed_vehicles,load_imbalance,mpi_wait_ms,comm_to_compute_ratio,conservation
+Sequential,Sequential Baseline (1T),Tier 3 (Regional Mega-Corridor),2000000,3600,1,1,1,59484.26,1.0,1.0,5.51e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 1 Thread (1T),Tier 3 (Regional Mega-Corridor),2000000,3600,1,1,1,64704.27,0.919,1.0,5.06e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 2 Threads (2T),Tier 3 (Regional Mega-Corridor),2000000,3600,2,2,1,55910.07,1.064,0.532,5.86e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 4 Threads (4T),Tier 3 (Regional Mega-Corridor),2000000,3600,4,4,1,43421.83,1.37,0.342,7.54e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 8 Threads (8T),Tier 3 (Regional Mega-Corridor),2000000,3600,8,8,1,39851.16,1.493,0.187,8.22e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 16 Threads (16T),Tier 3 (Regional Mega-Corridor),2000000,3600,16,16,1,39181.14,1.518,0.095,8.36e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 20 Threads (20T),Tier 3 (Regional Mega-Corridor),2000000,3600,20,20,1,39673.38,1.499,0.075,8.26e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Static 64,Tier 3 (Regional Mega-Corridor),2000000,3600,4,4,1,43461.76,1.369,0.342,7.54e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Dynamic 64,Tier 3 (Regional Mega-Corridor),2000000,3600,4,4,1,43702.58,1.361,0.34,7.49e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Guided 64,Tier 3 (Regional Mega-Corridor),2000000,3600,4,4,1,40221.57,1.479,0.37,8.14e+08,896389,18080,1.000,0.00,0.000,VERIFIED
+MS-MPI,MS-MPI 1 Rank (1P),Tier 3 (Regional Mega-Corridor),2000000,3600,1,1,1,126419.61,0.471,1.0,2.59e+08,892371,17894,1.000,0.00,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 2 Ranks (2P),Tier 3 (Regional Mega-Corridor),2000000,3600,2,1,2,84284.92,0.706,0.353,3.89e+08,926298,17889,1.000,27951.96,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 4 Ranks (4P),Tier 3 (Regional Mega-Corridor),2000000,3600,4,1,4,56644.52,1.05,0.263,5.78e+08,965854,18425,1.000,13649.32,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 8 Ranks (8P),Tier 3 (Regional Mega-Corridor),2000000,3600,8,1,8,62846.19,0.947,0.118,5.21e+08,1212090,21094,1.001,36560.20,0.000,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx2T (4W),Tier 3 (Regional Mega-Corridor),2000000,3600,4,2,2,67866.09,0.876,0.219,4.83e+08,889675,18038,1.000,21064.44,0.310,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx4T (8W),Tier 3 (Regional Mega-Corridor),2000000,3600,8,4,2,56334.36,1.056,0.132,5.81e+08,889675,18038,1.000,15503.83,0.275,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx8T (16W),Tier 3 (Regional Mega-Corridor),2000000,3600,16,8,2,53719.39,1.107,0.069,6.10e+08,889675,18038,1.000,14291.41,0.266,VERIFIED (100% Conserved)
+Hybrid,Hybrid 4Rx2T (8W),Tier 3 (Regional Mega-Corridor),2000000,3600,8,2,4,55644.74,1.069,0.134,5.88e+08,966430,18421,1.000,24360.77,0.438,VERIFIED (100% Conserved)
+Hybrid,Hybrid 4Rx4T (16W),Tier 3 (Regional Mega-Corridor),2000000,3600,16,4,4,55662.71,1.069,0.067,5.88e+08,966430,18421,1.000,23120.25,0.415,VERIFIED (100% Conserved)
+CUDA GPU,NVIDIA RTX 4000 Ada (GPU),Tier 3 (Regional Mega-Corridor),2000000,3600,1,1,1,4456.78,13.347,1.0,7.35e+09,1461007,16288,1.000,0.00,0.000,VERIFIED (100% Conserved)

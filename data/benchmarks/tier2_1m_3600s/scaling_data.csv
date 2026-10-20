@@ -1,0 +1,21 @@
+category,label,tier,cars,steps,workers,threads,ranks,sim_time_ms,speedup,efficiency,cell_update_rate,active_vehicles,completed_vehicles,load_imbalance,mpi_wait_ms,comm_to_compute_ratio,conservation
+Sequential,Sequential Baseline (1T),Tier 2 (Metropolitan Karachi),1000000,3600,1,1,1,70377.07,1.0,1.0,3.04e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 1 Thread (1T),Tier 2 (Metropolitan Karachi),1000000,3600,1,1,1,75547.88,0.932,1.0,2.83e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 2 Threads (2T),Tier 2 (Metropolitan Karachi),1000000,3600,2,2,1,58780.30,1.197,0.599,3.64e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 4 Threads (4T),Tier 2 (Metropolitan Karachi),1000000,3600,4,4,1,46078.50,1.527,0.382,4.64e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 8 Threads (8T),Tier 2 (Metropolitan Karachi),1000000,3600,8,8,1,43806.70,1.607,0.201,4.88e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 16 Threads (16T),Tier 2 (Metropolitan Karachi),1000000,3600,16,16,1,39847.69,1.766,0.11,5.36e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP,OpenMP 20 Threads (20T),Tier 2 (Metropolitan Karachi),1000000,3600,20,20,1,43160.83,1.631,0.082,4.95e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Static 64,Tier 2 (Metropolitan Karachi),1000000,3600,4,4,1,49540.57,1.421,0.355,4.31e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Dynamic 64,Tier 2 (Metropolitan Karachi),1000000,3600,4,4,1,53135.52,1.324,0.331,4.02e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+OpenMP Schedule,OpenMP 4T Schedule Guided 64,Tier 2 (Metropolitan Karachi),1000000,3600,4,4,1,43684.23,1.611,0.403,4.89e+08,654218,15536,1.000,0.00,0.000,VERIFIED
+MS-MPI,MS-MPI 1 Rank (1P),Tier 2 (Metropolitan Karachi),1000000,3600,1,1,1,117534.86,0.599,1.0,1.82e+08,644348,12804,1.000,0.00,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 2 Ranks (2P),Tier 2 (Metropolitan Karachi),1000000,3600,2,1,2,52748.58,1.334,0.667,4.05e+08,636343,12800,1.000,13930.40,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 4 Ranks (4P),Tier 2 (Metropolitan Karachi),1000000,3600,4,1,4,36461.84,1.93,0.483,5.86e+08,655236,12809,1.000,7046.90,0.000,VERIFIED (100% Conserved)
+MS-MPI,MS-MPI 8 Ranks (8P),Tier 2 (Metropolitan Karachi),1000000,3600,8,1,8,40521.81,1.737,0.217,5.27e+08,774465,20057,1.000,6638.04,0.000,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx2T (4W),Tier 2 (Metropolitan Karachi),1000000,3600,4,2,2,43351.81,1.623,0.406,4.93e+08,643685,12887,1.000,12641.79,0.292,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx4T (8W),Tier 2 (Metropolitan Karachi),1000000,3600,8,4,2,35856.03,1.963,0.245,5.96e+08,643685,12887,1.000,10866.49,0.303,VERIFIED (100% Conserved)
+Hybrid,Hybrid 2Rx8T (16W),Tier 2 (Metropolitan Karachi),1000000,3600,16,8,2,33826.64,2.081,0.13,6.32e+08,643685,12887,1.000,10036.36,0.297,VERIFIED (100% Conserved)
+Hybrid,Hybrid 4Rx2T (8W),Tier 2 (Metropolitan Karachi),1000000,3600,8,2,4,32595.37,2.159,0.27,6.56e+08,649367,12548,1.000,11205.99,0.344,VERIFIED (100% Conserved)
+Hybrid,Hybrid 4Rx4T (16W),Tier 2 (Metropolitan Karachi),1000000,3600,16,4,4,36694.19,1.918,0.12,5.82e+08,649367,12548,1.000,13555.62,0.369,VERIFIED (100% Conserved)
+CUDA GPU,NVIDIA RTX 4000 Ada (GPU),Tier 2 (Metropolitan Karachi),1000000,3600,1,1,1,1621.14,43.412,1.0,1.32e+10,970585,10586,1.000,0.00,0.000,VERIFIED (100% Conserved)
