@@ -4,9 +4,9 @@
 
 ### City-Scale Microscopic Traffic & Congestion Simulator
 
-KarachiFlow is an urban mobility and microscopic traffic simulator modeled on the road network of Karachi, Pakistan. Built using the Nagel–Schreckenberg cellular automaton model, it simulates vehicle dynamics and rush-hour bottlenecks across major city corridors using high-performance parallel computing.
+A high-performance traffic simulator built on the real OpenStreetMap road network of Karachi. Simulate millions of individual vehicles across 7.5-meter road cells, compare **Sequential**, **OpenMP**, **MS-MPI**, **Hybrid (MPI + OpenMP)**, and **CUDA GPU** execution, and explore rush-hour bottlenecks in an interactive WebGL map dashboard.
 
-[Overview](#overview) · [Architecture](#architecture) · [Quickstart](#quickstart) · [Interactive Dashboard](#interactive-dashboard) · [Benchmarking](#benchmarking) · [Verification](#verification) · [Tech Stack](#tech-stack)
+[Overview](#overview) · [Preview](#preview) · [Features](#features) · [Parallel Approaches](#parallel-approaches) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [Setup](#setup) · [Testing](#testing)
 
 </div>
 
@@ -14,227 +14,233 @@ KarachiFlow is an urban mobility and microscopic traffic simulator modeled on th
 
 ## Overview
 
-**KarachiFlow** simulates city-scale traffic flows by modeling individual vehicle dynamics, lane-level interactions, and arterial traffic patterns across Karachi's real road network (extracted via OpenStreetMap).
+KarachiFlow models urban traffic at the individual vehicle level across real Karachi corridors such as Shahrah-e-Faisal, M.A. Jinnah Road, University Road, and Saddar. Every road lane is divided into 7.5-meter cells and updated every simulated second using the four-step Nagel-Schreckenberg cellular automaton model (speed up, brake for the gap ahead, random human slowdown, and move forward).
 
-The simulator is designed to scale across multi-core processors, distributed nodes, and GPUs using a hybrid parallel architecture (OpenMP + MPI + CUDA), enabling fast simulation of millions of vehicle updates.
+Because updating millions of cars over an entire hour requires tens of billions of cell updates, KarachiFlow implements five parallel execution engines sharing the exact same traffic rules. Simulation runs can export lightweight state snapshots for offline playback and bottleneck analysis in a Streamlit and PyDeck dashboard.
 
-### Key Capabilities
-- **Real Metropolitan Road Network:** Ingests 74,914 directed road segments, 27,006 intersections, and 1,074,814 spatial cells (7.5m cell resolution) serialized into zero-copy binary format.
-- **Microscopic Physics:** Discrete 4-step Nagel–Schreckenberg (NaSch) cellular automaton with lookahead braking, stochastic slowing ($p_{\text{slow}} = 0.2$), and yellow-box intersection clearing.
-- **Shared-Memory Parallelism (OpenMP):** Multi-threaded segment updates with cache line padding (`alignas(64)`), dynamic/static/guided loop scheduling, and bit-exact determinism (`splitmix64`).
-- **Distributed-Memory Parallelism (MPI):** Spatial domain decomposition via recursive bisection, non-blocking halo exchanges (`MPI_Isend` / `MPI_Irecv`), and zero vehicle loss during boundary migrations.
-- **Hybrid Orchestration (MPI + OpenMP):** Non-blocking communication-computation overlap with load imbalance ($\lambda$) and communication ratio ($R_{\text{comm}}$) telemetry.
-- **GPU Acceleration (CUDA Extension):** Structure of Arrays (SoA) layout with deterministic 2-phase `atomicMin` collision arbitration, running resident in device memory with seamless host fallback for non-CUDA platforms.
-- **Decoupled Geospatial Dashboard:** Interactive WebGL visualization built on Streamlit and PyDeck with time-scrubber playback and real-time congestion classification.
+---
+
+## Preview
+
+<div align="center">
+
+### City Traffic Replay Dashboard
+
+<img src="docs/screenshots/dashboard_city_replay_full.png" alt="KarachiFlow city traffic replay dashboard" width="90%" />
+
+<sub>The main dashboard replays rush-hour traffic across 74,914 road segments with live KPI cards, congestion color coding, and timeline controls.</sub>
+
+<br/><br/>
+
+### Bottleneck Heatmap & Commuter Zones
+
+<img src="docs/screenshots/dashboard_bottleneck_heatmap_overlay.png" alt="KarachiFlow bottleneck heatmap and commuter zones" width="90%" />
+
+<sub>Spatial heatmap and origin-destination zone overlays highlight congestion hotspots across Saddar, Karsaz, and Gulshan.</sub>
+
+<br/><br/>
+
+### Parallel Speedup & Efficiency Analytics
+
+<img src="docs/screenshots/benchmark_scaling_efficiency_overview.png" alt="KarachiFlow parallel speedup and efficiency charts" width="90%" />
+
+<sub>Interactive scaling charts compare speedup, parallel efficiency, GPU acceleration, and MPI communication overhead across worker counts.</sub>
+
+<br/><br/>
+
+### What-If Incident & Weak Scaling Analysis
+
+<img src="docs/screenshots/what_if_incident_weak_scaling_overview.png" alt="KarachiFlow what-if incident and weak scaling view" width="90%" />
+
+<sub>Counterfactual scenario analysis evaluates the impact of a peak-hour bottleneck on Shahrah-e-Faisal alongside weak scaling efficiency.</sub>
+
+</div>
+
+---
+
+## Features
+
+- Extract and discretize real Karachi road networks from OpenStreetMap into fast binary files (`7.5m` cell resolution).
+- Simulate 500,000 to 10,000,000 vehicles across three geographic tiers (Urban Core, Metropolitan Karachi, and Regional Mega-Corridor).
+- Compare Sequential, OpenMP, MS-MPI, Hybrid (MPI + OpenMP), and CUDA GPU execution on the same traffic workload.
+- Guarantee 100% bit-exact repeatability between single-core and multi-thread runs using double-buffered grids and stateless hashing.
+- Evaluate OpenMP loop scheduling policies (`static`, `dynamic`, and `guided`) and MPI load balance across processes.
+- Replay simulation snapshots at sub-100ms frame scrubbing speeds in an interactive PyDeck WebGL map.
+- Run counterfactual "What-If" incident simulations to measure speed drops and queue spillback on major arteries.
+
+---
+
+## Parallel Approaches
+
+| Approach | How it works | Key Strength |
+| --- | --- | --- |
+| **Sequential Baseline** | Updates all road segments and intersections on a single CPU core using flat contiguous arrays. | Serves as the exact $T_1$ reference for speedup and correctness checks. |
+| **OpenMP (Shared Memory)** | Splits road segments across CPU threads with 64-byte padded private counters and configurable loop schedules. | Low overhead on compact maps and 100% bit-exact trajectory match. |
+| **MS-MPI (Distributed Memory)** | Partitions the city map into geographic regions and overlaps interior road updates with non-blocking `MPI_Isend` / `MPI_Irecv` boundary transfers. | Scales across separate processes with zero vehicle loss across borders. |
+| **Hybrid (MPI + OpenMP)** | Combines coarse-grained MPI map regions with multi-threaded OpenMP teams inside each process. | Reaches the highest CPU speedup (**2.16x**) by improving cache locality and reducing MPI message traffic. |
+| **CUDA GPU** | Stores vehicle state in Structure-of-Arrays (SoA) device memory, spawns trips directly on the GPU, and resolves intersection turns via `atomicMin`. | Delivers up to **43.41x** speedup (**13.19 billion** cell updates/sec) by streaming across GPU memory bandwidth. |
+
+---
+
+## Benchmarks
+
+All benchmarks below were executed for a full **1-hour simulated horizon (3,600 steps)** with snapshot disk I/O disabled (`--snapshot-interval 0`):
+
+| Geographic Tier | Network Scale | Vehicle Workload | Sequential CPU ($T_1$) | Best Parallel CPU | CUDA GPU Runtime | Peak GPU Speedup |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Tier 1: Urban Core** | 74,914 segments / 1.07M cells | 500,000 cars | 7.57 s | 5.79 s (**1.31x** @ OMP 8T) | **0.93 s** | **8.18x** |
+| **Tier 2: Metro Karachi** | 471,337 segments / 5.94M cells | 1,000,000 cars | 70.38 s | 32.60 s (**2.16x** @ Hybrid 4R×2T) | **1.62 s** | **43.41x** |
+| **Tier 3: Regional Mega** | 568,542 segments / 9.10M cells | 2,000,000 cars | 59.48 s | 39.18 s (**1.52x** @ OMP 16T) | **4.46 s** | **13.35x** |
+| **Tier 3: Pre-Seeded Load** | 568,542 segments / 9.10M cells | 10,000,000 cars | 34.37 s | 22.61 s (**1.52x** @ OMP 16T) | **1.25 s** | **27.43x** |
+
+<br/>
+
+<div align="center">
+
+<img src="data/benchmarks/tier2_1m_3600s/speedup_scaling.png" alt="Tier 2 Metropolitan Karachi scaling and GPU speedup chart" width="90%" />
+
+<sub>3,600-step scaling on Tier 2 Metropolitan Karachi (1,000,000 vehicles): Hybrid MPI + OpenMP reaches 2.16x on CPU (left), while GPU-resident CUDA execution reaches 43.41x speedup (right).</sub>
+
+</div>
 
 ---
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        KarachiFlow Architecture                        │
-└────────────────────────────────────────────────────────────────────────┘
-                                    │
-           ┌────────────────────────┴────────────────────────┐
-           ▼                                                 ▼
-┌─────────────────────────────┐                   ┌──────────────────────┐
-│  Road Network Topology      │                   │ Microscopic Physics  │
-│  - 74,914 Directed Segments │                   │ - 7.5m Cell Grid     │
-│  - 1,074,814 Spatial Cells  │                   │ - Discrete NaSch CA  │
-│  - 9 Origin/Destination Hubs│                   │ - Double Buffering   │
-│  - Zero-Copy Mmap Binary    │                   │ - Yellow-Box Merges  │
-└─────────────────────────────┘                   └──────────────────────┘
-           │                                                 │
-           └────────────────────────┬────────────────────────┘
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                      Parallel Computing Frameworks                     │
-├──────────────────────────┬─────────────────────────┬───────────────────┤
-│ Shared-Memory (OpenMP)   │ Distributed (MS-MPI)    │ Hybrid Orchestration│
-│ - 64-byte Cache Padding  │ - Recursive Bisection   │ - MPI_THREAD_     │
-│ - Dynamic/Static Sched   │ - Non-Blocking Halos    │   FUNNELED        │
-│ - Deterministic Hash PRNG│ - Communication Overlap │ - Inter-Node Halo │
-│ - 100% Bit-Exact Match   │ - Exact Conservation    │ - Intra-Node Pool │
-└──────────────────────────┴─────────────────────────┴───────────────────┘
-                                    │
-           ┌────────────────────────┴────────────────────────┐
-           ▼                                                 ▼
-┌─────────────────────────────┐                   ┌──────────────────────┐
-│  Geospatial Visualization   │                   │ GPU Acceleration     │
-│  - Streamlit + PyDeck WebGL │                   │ - Structure of Arrays│
-│  - CartoDB Dark Basemap     │                   │ - 2-Phase Kernel /   │
-│  - RGBA Congestion States   │                   │   Host CPU Fallback  │
-│  - Plotly PDC Scaling Curves│                   │ - atomicMin Arbitrate│
-└─────────────────────────────┘                   └──────────────────────┘
+<div align="center">
+
+<img src="docs/screenshots/arch_pipeline_diagram.png" alt="KarachiFlow end-to-end simulation workflow" width="90%" />
+
+<sub>End-to-end workflow separating offline OpenStreetMap graph preparation, the per-second C++/CUDA simulation loop, and interactive WebGL replay.</sub>
+
+</div>
+
+### Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| **Simulation Core** | C++17, CMake |
+| **CPU Parallelism** | OpenMP (Shared Memory), Microsoft MPI / OpenMPI (Distributed & Hybrid) |
+| **GPU Acceleration** | NVIDIA CUDA (`sm_89`, Structure-of-Arrays, Lock-Free Atomics) |
+| **GIS & Dashboard** | Python, OSMnx, NetworkX, Streamlit, PyDeck (WebGL), Plotly, Matplotlib |
+
+### Project Structure
+
+```text
+src/engine/       Core NaSch traffic rules, vehicle structures, binary road loader, and trip demand
+src/parallel/     OpenMP, MS-MPI, Hybrid (MPI + OpenMP), and CUDA GPU simulation engines
+src/main.cpp      Unified CLI entrypoint, timer harness, and benchmark runner
+scripts/          OSMnx map preprocessor, Streamlit/PyDeck dashboard, and benchmark suites
+data/benchmarks/  Empirical 3,600-step CSV timings, JSON summaries, and scaling plots
+docs/             Project report (.docx), proposal (.pdf), and dashboard screenshots
 ```
 
 ---
 
-## Quickstart
+## Setup
 
 ### Prerequisites
-- **C++ Compiler:** C++17 compatible compiler (MSVC 2022, MinGW-w64 GCC 14+, or Clang).
-- **Build System:** CMake >= 3.20.
-- **Python:** Python 3.10 to 3.13.
-- *(Optional)* **MPI:** Microsoft MPI (MS-MPI v10+) or OpenMPI.
-- *(Optional)* **GPU:** NVIDIA CUDA Toolkit 12+ (RTX 4000 / Ada Lovelace / Ampere).
 
-### 1. Clone the Repository
+- **C++ Compiler:** C++17 compiler (MSVC 2022, GCC 14+, or Clang) and CMake 3.20+
+- **Python:** Python 3.10+
+- *(Optional)* **MPI:** Microsoft MPI (MS-MPI v10+) or OpenMPI
+- *(Optional)* **GPU:** NVIDIA CUDA Toolkit 12+
+
+### 1. Clone and set up Python
+
 ```bash
 git clone https://github.com/AbdulRafayMughal86/KarachiFlow.git
 cd KarachiFlow
-```
 
-### 2. Set Up Python Environment
-```bash
-# Create and activate virtual environment
 python -m venv .venv
-
 # Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
-
 # Linux / macOS:
 source .venv/bin/activate
 
-# Install required dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Build C++ Targets
-```bash
-# Configure CMake build directory
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+### 2. Build the C++ and CUDA binaries
 
-# Compile all simulation binaries
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-All compiled binaries are generated in `bin/`:
-- `bin/karachiflow`: Unified production simulation CLI.
-- `bin/test_network_reader`: Graph binary ingestion verification.
-- `bin/test_nasch_validation`: Microscopic NaSch physics test.
-- `bin/test_openmp_scaling`: OpenMP multi-thread scaling & determinism test.
-- `bin/test_mpi_simulation`: Distributed-memory MPI domain decomposition test.
-- `bin/test_hybrid_simulation`: Hybrid MPI + OpenMP orchestration test.
-- `bin/test_cuda_simulation`: GPU Structure-of-Arrays & collision arbitration test.
-
----
-
-## Running the Simulation
-
-Execute `bin/karachiflow` with flexible engine and workload options:
+### 3. Run the simulator
 
 ```bash
-# Fast developer mode (5,000 vehicles, 60s runtime < 1s)
+# Quick developer run (5,000 vehicles, 60 steps, finishes in < 1 second)
 ./bin/karachiflow --dev
 
-# OpenMP shared-memory execution across 8 threads
+# OpenMP shared-memory run across 8 threads
 ./bin/karachiflow --threads 8 --cars 50000 --steps 60
 
-# Distributed-memory MPI execution across 4 processes
+# OpenMP with guided loop scheduling
+./bin/karachiflow --threads 8 --schedule guided 64 --cars 50000 --steps 60
+
+# Distributed MS-MPI run across 4 processes
 mpiexec -n 4 ./bin/karachiflow --mpi --cars 50000 --steps 60
 
-# Hybrid orchestration (2 MPI ranks x 4 OpenMP threads = 8 workers)
-mpiexec -n 2 ./bin/karachiflow --hybrid --threads 4 --cars 50000 --steps 60
+# Hybrid MPI + OpenMP run (4 MPI ranks x 2 OpenMP threads)
+mpiexec -n 4 ./bin/karachiflow --hybrid --threads 2 --cars 50000 --steps 60
 
-# GPU Acceleration engine (runs on GPU if available, or CPU SoA fallback)
-./bin/karachiflow --cuda --cars 50000 --steps 60
-
-# Export periodic telemetry snapshots for dashboard playback (every 10s)
-./bin/karachiflow --cuda --cars 50000 --steps 60 --snapshot-interval 10
+# Native CUDA GPU execution
+./bin/karachiflow_gpu --cuda --cars 500000 --steps 3600 --snapshot-interval 0
 ```
 
-### CLI Command Options
-| Flag | Description | Default |
-| :--- | :--- | :--- |
-| `--dev` | Fast developer mode (5k cars, 60s, <1s runtime) | Disabled |
-| `--cars <N>` | Total target vehicle pool | 5,000 (dev) / 100,000 (full) |
-| `--steps <S>` | Simulation timesteps (seconds) | 60 (dev) / 3,600 (full) |
-| `--threads <T>` | OpenMP thread count | All available cores |
-| `--schedule <sched> [chunk]` | OpenMP loop schedule (`static`, `dynamic`, `guided`) | `dynamic 64` |
-| `--mpi` | Enable distributed-memory MPI engine | Disabled |
-| `--hybrid` | Enable hybrid MPI + OpenMP orchestration | Disabled |
-| `--cuda` | Enable GPU acceleration engine | Disabled |
-| `--sequential` | Force single-threaded baseline reference | Disabled |
-| `--snapshot-interval <sec>` | Telemetry snapshot frequency (0 to disable) | 10 |
-| `--snapshots <dir>` | Directory for telemetry snapshot CSVs | `data/snapshots` |
-
----
-
-## Interactive Dashboard
-
-Launch the decoupled Streamlit + PyDeck geospatial visualization:
+### 4. Launch the interactive dashboard
 
 ```bash
 streamlit run scripts/dashboard.py
 ```
-Open **`http://localhost:8501`** in your browser to inspect:
-- **WebGL Map View:** 74,914 road segments rendered on a dark basemap.
-- **Live Congestion States:** Color-coded arterial flow (Green: free-flow, Amber: moderate, Red: severe queue).
-- **Time-Scrubber Replay:** Scrub through simulation timesteps ($t = 0 \to 120\text{s}$) to observe bottleneck shockwaves.
-- **PDC Metrics Analytics:** Interactive Plotly charts for Speedup ($S_p$), Parallel Efficiency ($E_p$), Communication Overhead ($R_{\text{comm}}$), and Load Imbalance ($\lambda$).
+
+Open `http://localhost:8501` in your browser to inspect the Karachi traffic replay, bottleneck heatmaps, and scaling charts.
 
 ---
 
-## Benchmarking & Performance Evaluation
+## Testing
 
-Run the automated benchmarking harness to perform strong scaling sweeps and generate publication-quality figures:
-
-```bash
-# Run on laptop / multi-core CPU (takes < 5 seconds)
-python scripts/run_benchmarks.py --scale small --skip-cuda
-
-# Run full evaluation across OpenMP, MPI, Hybrid, and GPU
-python scripts/run_benchmarks.py --scale medium
-```
-
-### Generated Artifacts
-- `data/benchmarks/scaling_data.csv`: Complete timing records across all configurations.
-- `data/benchmarks/benchmark_summary.json`: Machine-readable performance summary.
-- `data/benchmarks/scaling_curves.png`: Publication-grade Speedup ($S_p$) and Efficiency ($E_p$) comparison curves.
-
----
-
-## Verification & Test Suite
-
-KarachiFlow includes a comprehensive automated test suite verifying 100% mathematical and architectural correctness:
+Run the automated C++, CUDA, and Python verification suite:
 
 ```bash
-# 1. Road graph binary loader & zero-copy mmap
+# 1. Binary road graph loader verification
 ./bin/test_network_reader
 
-# 2. NaSch fundamental diagram & microscopic physics
+# 2. NaSch fundamental diagram and traffic physics check
 ./bin/test_nasch_validation
 
-# 3. OpenMP 100% bit-exact determinism across thread counts
+# 3. OpenMP bit-exact determinism across 1, 2, 4, and 8 threads
 ./bin/test_openmp_scaling
 
-# 4. Distributed MPI non-blocking halo exchanges & zero boundary loss
+# 4. MS-MPI boundary handover and zero vehicle loss check
 mpiexec -n 4 ./bin/test_mpi_simulation
 
-# 5. Hybrid orchestration scaling & latency hiding
+# 5. Hybrid MPI + OpenMP verification
 mpiexec -n 2 ./bin/test_hybrid_simulation
 
-# 6. GPU collision arbitration & zero double-occupancy invariant (50k cars)
-./bin/test_cuda_simulation 50000
+# 6. CUDA GPU zero-collision and conservation check (50,000 vehicles)
+./bin/test_cuda_simulation_gpu 50000
 
-# 7. Python automated unit test suite (18/18 tests)
+# 7. Python unit test suite
 python -m unittest discover tests
 ```
 
 ---
 
-## Tech Stack
+## Credits
 
-- **Core Engine:** C++17
-- **Shared-Memory Parallelism:** OpenMP 4.5+
-- **Distributed-Memory Computing:** MS-MPI / OpenMPI
-- **GPU Acceleration:** NVIDIA CUDA (Compute Capability 8.9 `sm_89` / Ada Lovelace)
-- **Data & Visuals:** Python (Streamlit, PyDeck, Plotly, OSMnx, GeoPandas, NetworkX)
+Built by <a href="https://github.com/AbdulRafayMughal86"><strong>Abdul Rafay Mughal</strong></a>, <a href="https://github.com/abubakar-ahmed-dev"><strong>Abubakar Ahmed</strong></a>, and <a href="https://github.com/awaisbegin014"><strong>Muhammad Awais</strong></a>.
+
+<br/>
 
 ---
 
-## License
+<div align="center">
 
-This project is licensed under the [MIT License](LICENSE).
+### Thanks for checking this out! 👋
+
+*"Simulating a full hour of Karachi traffic in 1.62 seconds is easy; surviving Shahrah-e-Faisal at 9 AM is the real benchmark."* 🚗
+
+</div>
