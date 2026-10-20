@@ -55,7 +55,8 @@ env/
 .pytest_cache/
 
 # Data & Large Files (Keep repository lightweight)
-data/
+data/*
+!data/benchmarks/
 *.osm
 *.pbf
 *.bin

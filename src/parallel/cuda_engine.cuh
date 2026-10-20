@@ -48,6 +48,10 @@ struct CudaDeviceArrays {
     // Precomputed routing and destination field buffers
     int32_t* d_routing_table{nullptr};
     uint8_t* d_is_dest_node{nullptr};
+
+    // Dynamic demand injection buffers
+    int32_t* d_origin_candidates{nullptr};
+    uint32_t* d_injected_count{nullptr};
 };
 
 struct CudaMetrics {

@@ -171,7 +171,7 @@ st.markdown(
     }
 
     /* 6. High-Contrast Frosted Glassmorphism Metric Cards */
-    div[data-testid="metric-container"] {
+    div[data-testid="metric-container"], div[data-testid="stMetric"] {
         background: rgba(16, 23, 38, 0.75) !important;
         border: 1px solid rgba(255, 255, 255, 0.08) !important;
         border-radius: 12px !important;
@@ -180,29 +180,42 @@ st.markdown(
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35) !important;
         transition: transform 0.2s ease, border-color 0.2s ease !important;
     }
-    div[data-testid="metric-container"]:hover {
+    div[data-testid="metric-container"]:hover, div[data-testid="stMetric"]:hover {
         border-color: rgba(56, 189, 248, 0.35) !important;
         transform: translateY(-2px) !important;
     }
-    div[data-testid="metric-container"] label {
+    div[data-testid="metric-container"] label, div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * {
         color: #94a3b8 !important;
         font-size: 0.74rem !important;
         font-weight: 600 !important;
         text-transform: uppercase !important;
         letter-spacing: 0.06em !important;
     }
-    div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+    div[data-testid="metric-container"] div[data-testid="stMetricValue"], div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] * {
         color: #f8fafc !important;
         font-size: 1.55rem !important;
         font-weight: 700 !important;
         font-family: "JetBrains Mono", Consolas, monospace !important;
         letter-spacing: -0.02em !important;
     }
-    div[data-testid="metric-container"] div[data-testid="stMetricDelta"] {
+    div[data-testid="metric-container"] div[data-testid="stMetricDelta"], div[data-testid="stMetricDelta"], div[data-testid="stMetricDelta"] * {
+        background: transparent !important;
         font-size: 0.74rem !important;
         font-weight: 500 !important;
         font-family: "JetBrains Mono", Consolas, monospace !important;
-        color: #94a3b8 !important;
+        color: #38bdf8 !important;
+    }
+    div[data-testid="stMetricDelta"] svg {
+        display: none !important;
+    }
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        background-color: rgba(16, 23, 38, 0.92) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        color: #f8fafc !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
+        color: #f8fafc !important;
     }
     div[data-testid="metric-container"] div[data-testid="stMetricDelta"] svg {
         display: none !important;

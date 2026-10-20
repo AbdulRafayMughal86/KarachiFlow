@@ -24,7 +24,7 @@ namespace karachiflow {
 
 namespace {
 
-// Counter-based PRNG hash (splitmix-style) for lockless, reproducible stochastic deceleration
+// Counter-based PRNG hash for lockless, reproducible stochastic deceleration
 #if defined(__CUDACC__)
 __host__ __device__
 #endif
@@ -44,6 +44,85 @@ inline bool gpu_should_slow(uint32_t vehicle_id, uint32_t step, float p_slow) {
 }
 
 #if defined(__CUDACC__)
+__device__ inline uint32_t atomicAddBounded(uint32_t* address, uint32_t val, uint32_t max_val) {
+    uint32_t old = *address;
+    while (old < max_val) {
+        uint32_t assumed = old;
+        old = atomicCAS(address, assumed, (assumed + val < max_val) ? (assumed + val) : max_val);
+        if (assumed == old) return assumed;
+    }
+    return old;
+}
+
+// CUDA Device Kernel: Dynamic demand injection on device
+__global__ void inject_demand_kernel(
+    uint32_t to_inject,
+    uint32_t old_injected,
+    uint32_t max_vehicles,
+    uint32_t current_step,
+    uint32_t num_candidates,
+    uint32_t dest_zone_count,
+    const int32_t* __restrict__ d_origin_candidates,
+    const int16_t* __restrict__ d_seg_lanes,
+    const int16_t* __restrict__ d_seg_cells_per_lane,
+    const int16_t* __restrict__ d_seg_speed_limit,
+    const size_t* __restrict__ d_seg_cell_offset,
+    int32_t* __restrict__ d_current_cells,
+    uint32_t* __restrict__ d_injected_count,
+    int32_t* __restrict__ d_v_segment_id,
+    int16_t* __restrict__ d_v_lane,
+    int16_t* __restrict__ d_v_cell_idx,
+    uint8_t* __restrict__ d_v_velocity,
+    uint8_t* __restrict__ d_v_max_velocity,
+    int32_t* __restrict__ d_v_dest_zone,
+    uint8_t* __restrict__ d_v_active,
+    uint32_t* __restrict__ d_v_cells_traveled,
+    uint32_t* __restrict__ d_v_steps_traveled
+) {
+    uint32_t k = blockDim.x * blockIdx.x + threadIdx.x;
+    if (k >= to_inject) return;
+
+    const uint64_t base_cand = (static_cast<uint64_t>(old_injected + k) * 37ULL + static_cast<uint64_t>(current_step) * 17ULL) % num_candidates;
+
+    for (uint32_t attempt = 0; attempt < 16; ++attempt) {
+        const uint32_t cand_idx = static_cast<uint32_t>((base_cand + static_cast<uint64_t>(attempt) * 7919ULL) % num_candidates);
+        const int32_t seg_id = d_origin_candidates[cand_idx];
+        const int16_t lanes = d_seg_lanes[seg_id];
+        const int16_t cpl = d_seg_cells_per_lane[seg_id];
+        const size_t seg_off = d_seg_cell_offset[seg_id];
+
+        bool placed = false;
+        for (int16_t l = 0; l < lanes; ++l) {
+            size_t g_idx = seg_off + static_cast<size_t>(l) * cpl + 0;
+            if (d_current_cells[g_idx] == EMPTY_CELL) {
+                if (atomicCAS(&d_current_cells[g_idx], EMPTY_CELL, -2) == EMPTY_CELL) {
+                    uint32_t veh_id = atomicAddBounded(d_injected_count, 1, max_vehicles);
+                    if (veh_id < max_vehicles) {
+                        d_current_cells[g_idx] = static_cast<int32_t>(veh_id);
+                        d_v_segment_id[veh_id] = seg_id;
+                        d_v_lane[veh_id] = l;
+                        d_v_cell_idx[veh_id] = 0;
+                        d_v_velocity[veh_id] = 0;
+                        d_v_max_velocity[veh_id] = static_cast<uint8_t>(d_seg_speed_limit[seg_id]);
+                        d_v_dest_zone[veh_id] = static_cast<int32_t>(veh_id % (dest_zone_count > 0 ? dest_zone_count : 1));
+                        d_v_active[veh_id] = 1;
+                        d_v_cells_traveled[veh_id] = 0;
+                        d_v_steps_traveled[veh_id] = 0;
+                        placed = true;
+                        break;
+                    } else {
+                        d_current_cells[g_idx] = EMPTY_CELL;
+                        return;
+                    }
+                }
+            }
+        }
+        if (placed) {
+            break;
+        }
+    }
+}
+
 // CUDA Device Kernel: Stage 1 - Evaluate Acceleration, Gap, and Post Intent Reservation
 __global__ void evaluate_intent_kernel(
     uint32_t injected_vehicles,
@@ -51,7 +130,6 @@ __global__ void evaluate_intent_kernel(
     float p_slow,
     uint32_t dest_zone_count,
     uint32_t node_count,
-    // Vehicle SoA buffers
     const int32_t* __restrict__ d_v_segment_id,
     const int16_t* __restrict__ d_v_lane,
     const int16_t* __restrict__ d_v_cell_idx,
@@ -59,23 +137,19 @@ __global__ void evaluate_intent_kernel(
     const uint8_t* __restrict__ d_v_max_velocity,
     const int32_t* __restrict__ d_v_dest_zone,
     const uint8_t* __restrict__ d_v_active,
-    // Intermediate target intent buffers
     int32_t* __restrict__ d_target_g_idx,
     int32_t* __restrict__ d_target_seg_id,
     int16_t* __restrict__ d_target_lane,
     int16_t* __restrict__ d_target_cell,
     uint8_t* __restrict__ d_target_speed,
     uint8_t* __restrict__ d_target_trip_done,
-    // Spatial grid buffers
     const int32_t* __restrict__ d_current_cells,
     int32_t* __restrict__ d_cell_claim,
-    // Static segment topology buffers
     const int16_t* __restrict__ d_seg_lanes,
     const int16_t* __restrict__ d_seg_cells_per_lane,
     const int16_t* __restrict__ d_seg_speed_limit,
     const size_t* __restrict__ d_seg_cell_offset,
     const int32_t* __restrict__ d_seg_to_node,
-    // Precomputed routing buffers
     const int32_t* __restrict__ d_routing_table,
     const uint8_t* __restrict__ d_is_dest_node
 ) {
@@ -194,14 +268,13 @@ __global__ void evaluate_intent_kernel(
     d_target_cell[veh_id] = final_cell;
     d_target_speed[veh_id] = static_cast<uint8_t>(speed);
 
-    // Deterministic collision arbitration: Lowest vehicle ID reserves target cell
+    // Collision arbitration reservation claim
     atomicMin(&d_cell_claim[target_g], static_cast<int32_t>(veh_id));
 }
 
 // CUDA Device Kernel: Stage 2 - Arbitrate Conflict Claims and Advance Movement
 __global__ void arbitrate_and_advance_kernel(
     uint32_t injected_vehicles,
-    // Vehicle SoA buffers
     int32_t* __restrict__ d_v_segment_id,
     int16_t* __restrict__ d_v_lane,
     int16_t* __restrict__ d_v_cell_idx,
@@ -209,17 +282,14 @@ __global__ void arbitrate_and_advance_kernel(
     uint8_t* __restrict__ d_v_active,
     uint32_t* __restrict__ d_v_cells_traveled,
     uint32_t* __restrict__ d_v_steps_traveled,
-    // Target intent buffers
     const int32_t* __restrict__ d_target_g_idx,
     const int32_t* __restrict__ d_target_seg_id,
     const int16_t* __restrict__ d_target_lane,
     const int16_t* __restrict__ d_target_cell,
     const uint8_t* __restrict__ d_target_speed,
     const uint8_t* __restrict__ d_target_trip_done,
-    // Spatial grid buffers
     int32_t* __restrict__ d_next_cells,
     const int32_t* __restrict__ d_cell_claim,
-    // Static segment topology buffers
     const int16_t* __restrict__ d_seg_cells_per_lane,
     const size_t* __restrict__ d_seg_cell_offset
 ) {
@@ -238,7 +308,6 @@ __global__ void arbitrate_and_advance_kernel(
     int32_t winner_id = d_cell_claim[target_g];
 
     if (winner_id == static_cast<int32_t>(veh_id)) {
-        // Won reservation claim: Commit movement into next_cells buffer
         d_next_cells[target_g] = static_cast<int32_t>(veh_id);
         d_v_segment_id[veh_id] = d_target_seg_id[veh_id];
         d_v_lane[veh_id] = d_target_lane[veh_id];
@@ -246,7 +315,6 @@ __global__ void arbitrate_and_advance_kernel(
         d_v_velocity[veh_id] = d_target_speed[veh_id];
         d_v_cells_traveled[veh_id] += d_target_speed[veh_id];
     } else {
-        // Lost contention: Decelerate to 0 and remain in current cell
         int32_t cur_seg = d_v_segment_id[veh_id];
         int16_t cur_lane = d_v_lane[veh_id];
         int16_t cur_cell = d_v_cell_idx[veh_id];
@@ -284,6 +352,10 @@ void CudaEngine::allocate_device_memory() {
     CUDA_CALL(cudaMalloc(&m_device_arrays.d_vehicle_cells_traveled, v_bytes * sizeof(uint32_t)));
     CUDA_CALL(cudaMalloc(&m_device_arrays.d_vehicle_steps_traveled, v_bytes * sizeof(uint32_t)));
 
+    CUDA_CALL(cudaMemset(m_device_arrays.d_vehicle_active, 0, v_bytes * sizeof(uint8_t)));
+    CUDA_CALL(cudaMemset(m_device_arrays.d_vehicle_cells_traveled, 0, v_bytes * sizeof(uint32_t)));
+    CUDA_CALL(cudaMemset(m_device_arrays.d_vehicle_steps_traveled, 0, v_bytes * sizeof(uint32_t)));
+
     CUDA_CALL(cudaMalloc(&m_device_arrays.d_target_g_idx, v_bytes * sizeof(int32_t)));
     CUDA_CALL(cudaMalloc(&m_device_arrays.d_target_seg_id, v_bytes * sizeof(int32_t)));
     CUDA_CALL(cudaMalloc(&m_device_arrays.d_target_lane, v_bytes * sizeof(int16_t)));
@@ -307,6 +379,11 @@ void CudaEngine::allocate_device_memory() {
         CUDA_CALL(cudaMalloc(&m_device_arrays.d_routing_table, r_bytes * sizeof(int32_t)));
         CUDA_CALL(cudaMalloc(&m_device_arrays.d_is_dest_node, r_bytes * sizeof(uint8_t)));
     }
+
+    if (!m_origin_candidate_segments.empty()) {
+        CUDA_CALL(cudaMalloc(&m_device_arrays.d_origin_candidates, m_origin_candidate_segments.size() * sizeof(int32_t)));
+    }
+    CUDA_CALL(cudaMalloc(&m_device_arrays.d_injected_count, sizeof(uint32_t)));
     m_device_initialized = true;
 #else
     m_device_initialized = true;
@@ -345,6 +422,14 @@ void CudaEngine::free_device_memory() {
 
     if (m_device_arrays.d_routing_table) cudaFree(m_device_arrays.d_routing_table);
     if (m_device_arrays.d_is_dest_node) cudaFree(m_device_arrays.d_is_dest_node);
+
+    if (m_device_arrays.d_origin_candidates) {
+        cudaFree(m_device_arrays.d_origin_candidates);
+    }
+    if (m_device_arrays.d_injected_count) {
+        cudaFree(m_device_arrays.d_injected_count);
+    }
+    m_device_arrays = CudaDeviceArrays{};
 #endif
     m_device_initialized = false;
 }
@@ -375,6 +460,14 @@ void CudaEngine::copy_static_topology_to_device() {
     if (!m_routing_table.empty()) {
         CUDA_CALL(cudaMemcpy(m_device_arrays.d_routing_table, m_routing_table.data(), m_routing_table.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
         CUDA_CALL(cudaMemcpy(m_device_arrays.d_is_dest_node, m_is_dest_node.data(), m_is_dest_node.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
+    }
+
+    if (!m_origin_candidate_segments.empty() && m_device_arrays.d_origin_candidates) {
+        CUDA_CALL(cudaMemcpy(m_device_arrays.d_origin_candidates, m_origin_candidate_segments.data(),
+                             m_origin_candidate_segments.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
+    }
+    if (m_device_arrays.d_injected_count) {
+        CUDA_CALL(cudaMemcpy(m_device_arrays.d_injected_count, &m_injected_vehicles, sizeof(uint32_t), cudaMemcpyHostToDevice));
     }
 #endif
 }
@@ -600,6 +693,7 @@ bool CudaEngine::initialize(const SimulationConfig& config, std::string* error_m
 
 #if defined(__CUDACC__)
     CUDA_CALL(cudaMemcpy(m_device_arrays.d_current_cells, m_h_current_cells.data(), m_total_cells * sizeof(int32_t), cudaMemcpyHostToDevice));
+    CUDA_CALL(cudaMemset(m_device_arrays.d_next_cells, 0xFF, m_total_cells * sizeof(int32_t)));
     if (m_injected_vehicles > 0) {
         copy_vehicles_to_device(0, m_injected_vehicles);
     }
@@ -618,12 +712,40 @@ void CudaEngine::inject_demand() {
     const uint32_t steps_left = std::max(1u, m_config.total_steps - m_current_step);
     const uint32_t to_inject = std::min(remaining, std::max(1u, (remaining + steps_left - 1) / steps_left));
     const size_t num_candidates = m_origin_candidate_segments.size();
-    if (num_candidates == 0) return;
+    if (num_candidates == 0 || to_inject == 0) return;
 
+#if defined(__CUDACC__)
     const uint32_t old_injected = m_injected_vehicles;
-    (void)old_injected;
-    int failed_attempts = 0;
+    const int block_size = 256;
+    const int grid_size = (to_inject + block_size - 1) / block_size;
 
+    inject_demand_kernel<<<grid_size, block_size>>>(
+        to_inject, old_injected, static_cast<uint32_t>(m_max_vehicles),
+        m_current_step, static_cast<uint32_t>(num_candidates), m_dest_zone_count,
+        m_device_arrays.d_origin_candidates,
+        m_device_arrays.d_seg_lanes,
+        m_device_arrays.d_seg_cells_per_lane,
+        m_device_arrays.d_seg_speed_limit,
+        m_device_arrays.d_seg_cell_offset,
+        m_device_arrays.d_current_cells,
+        m_device_arrays.d_injected_count,
+        m_device_arrays.d_vehicle_segment_id,
+        m_device_arrays.d_vehicle_lane,
+        m_device_arrays.d_vehicle_cell_idx,
+        m_device_arrays.d_vehicle_velocity,
+        m_device_arrays.d_vehicle_max_velocity,
+        m_device_arrays.d_vehicle_dest_zone,
+        m_device_arrays.d_vehicle_active,
+        m_device_arrays.d_vehicle_cells_traveled,
+        m_device_arrays.d_vehicle_steps_traveled
+    );
+
+    CUDA_CALL(cudaMemcpy(&m_injected_vehicles, m_device_arrays.d_injected_count, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    if (m_injected_vehicles > m_max_vehicles) {
+        m_injected_vehicles = static_cast<uint32_t>(m_max_vehicles);
+    }
+#else
+    int failed_attempts = 0;
     for (uint32_t k = 0; k < to_inject && m_injected_vehicles < m_max_vehicles; ++k) {
         uint32_t veh_id = m_injected_vehicles;
         const size_t base_cand_idx = (static_cast<size_t>(veh_id) * 37u + m_current_step * 17u) % num_candidates;
@@ -665,19 +787,6 @@ void CudaEngine::inject_demand() {
             }
         }
     }
-
-#if defined(__CUDACC__)
-    const uint32_t newly_injected = m_injected_vehicles - old_injected;
-    if (newly_injected > 0) {
-        copy_vehicles_to_device(old_injected, newly_injected);
-        for (uint32_t i = old_injected; i < m_injected_vehicles; ++i) {
-            const auto& v = m_vehicles[i];
-            const auto& seg = m_segments[v.segment_id];
-            size_t g_idx = seg.local_to_global_cell(v.lane, v.cell_idx);
-            int32_t vid = v.id;
-            CUDA_CALL(cudaMemcpy(m_device_arrays.d_current_cells + g_idx, &vid, sizeof(int32_t), cudaMemcpyHostToDevice));
-        }
-    }
 #endif
 }
 
@@ -690,11 +799,9 @@ void CudaEngine::step() {
         const int block_size = 256;
         const int grid_size = (n_veh + block_size - 1) / block_size;
 
-        // Initialize claim buffer to INT32_MAX and next_cells to EMPTY_CELL (-1)
         CUDA_CALL(cudaMemsetAsync(m_device_arrays.d_cell_claim, 0x7F, m_total_cells * sizeof(int32_t)));
         CUDA_CALL(cudaMemsetAsync(m_device_arrays.d_next_cells, 0xFF, m_total_cells * sizeof(int32_t)));
 
-        // Stage 1: Intent evaluation & reservation claim (GPU-resident)
         evaluate_intent_kernel<<<grid_size, block_size>>>(
             n_veh, m_current_step, m_config.p_slow, m_dest_zone_count, m_network.node_count(),
             m_device_arrays.d_vehicle_segment_id, m_device_arrays.d_vehicle_lane, m_device_arrays.d_vehicle_cell_idx,
@@ -707,7 +814,6 @@ void CudaEngine::step() {
             m_device_arrays.d_routing_table, m_device_arrays.d_is_dest_node
         );
 
-        // Stage 2: Conflict resolution & movement advance (GPU-resident)
         arbitrate_and_advance_kernel<<<grid_size, block_size>>>(
             n_veh, m_device_arrays.d_vehicle_segment_id, m_device_arrays.d_vehicle_lane,
             m_device_arrays.d_vehicle_cell_idx, m_device_arrays.d_vehicle_velocity, m_device_arrays.d_vehicle_active,
@@ -718,17 +824,13 @@ void CudaEngine::step() {
             m_device_arrays.d_seg_cells_per_lane, m_device_arrays.d_seg_cell_offset
         );
 
-        // Swap ping-pong grid pointers on device
         std::swap(m_device_arrays.d_current_cells, m_device_arrays.d_next_cells);
-
-        // Grid state remains 100% GPU-resident! No host copy per step!
     }
 #else
     const uint32_t n_veh = m_injected_vehicles;
     std::fill(m_host_claims.begin(), m_host_claims.end(), std::numeric_limits<int32_t>::max());
     std::fill(m_h_next_cells.begin(), m_h_next_cells.end(), EMPTY_CELL);
 
-    // Stage 1: Intent Evaluation
     for (uint32_t i = 0; i < n_veh; ++i) {
         auto& v = m_vehicles[i];
         if (!v.active) continue;
@@ -822,7 +924,6 @@ void CudaEngine::step() {
         }
     }
 
-    // Stage 2: Arbitrate Conflict Claims & Advance Movement
     for (uint32_t i = 0; i < n_veh; ++i) {
         auto& v = m_vehicles[i];
         if (!v.active) continue;
@@ -846,7 +947,6 @@ void CudaEngine::step() {
             v.velocity = intent.speed;
             v.cells_traveled += intent.speed;
         } else {
-            // Decelerate and hold position
             size_t cur_g = m_segments[v.segment_id].local_to_global_cell(v.lane, v.cell_idx);
             m_h_next_cells[cur_g] = v.id;
             v.velocity = 0;
@@ -870,34 +970,46 @@ void CudaEngine::step() {
 void CudaEngine::sync_device_to_host() {
 #if defined(__CUDACC__)
     CUDA_CALL(cudaDeviceSynchronize());
+    if (m_device_arrays.d_injected_count) {
+        CUDA_CALL(cudaMemcpy(&m_injected_vehicles, m_device_arrays.d_injected_count, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        if (m_injected_vehicles > m_max_vehicles) {
+            m_injected_vehicles = static_cast<uint32_t>(m_max_vehicles);
+        }
+    }
     if (m_injected_vehicles > 0) {
         std::vector<int32_t> seg_ids(m_injected_vehicles);
         std::vector<int16_t> lanes(m_injected_vehicles);
         std::vector<int16_t> cells(m_injected_vehicles);
         std::vector<uint8_t> vels(m_injected_vehicles);
         std::vector<uint8_t> active(m_injected_vehicles);
+        std::vector<uint32_t> cells_trav(m_injected_vehicles);
+        std::vector<uint32_t> steps_trav(m_injected_vehicles);
 
         CUDA_CALL(cudaMemcpy(seg_ids.data(), m_device_arrays.d_vehicle_segment_id, m_injected_vehicles * sizeof(int32_t), cudaMemcpyDeviceToHost));
         CUDA_CALL(cudaMemcpy(lanes.data(), m_device_arrays.d_vehicle_lane, m_injected_vehicles * sizeof(int16_t), cudaMemcpyDeviceToHost));
         CUDA_CALL(cudaMemcpy(cells.data(), m_device_arrays.d_vehicle_cell_idx, m_injected_vehicles * sizeof(int16_t), cudaMemcpyDeviceToHost));
         CUDA_CALL(cudaMemcpy(vels.data(), m_device_arrays.d_vehicle_velocity, m_injected_vehicles * sizeof(uint8_t), cudaMemcpyDeviceToHost));
         CUDA_CALL(cudaMemcpy(active.data(), m_device_arrays.d_vehicle_active, m_injected_vehicles * sizeof(uint8_t), cudaMemcpyDeviceToHost));
+        CUDA_CALL(cudaMemcpy(cells_trav.data(), m_device_arrays.d_vehicle_cells_traveled, m_injected_vehicles * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        CUDA_CALL(cudaMemcpy(steps_trav.data(), m_device_arrays.d_vehicle_steps_traveled, m_injected_vehicles * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
         uint32_t act_count = 0;
         uint32_t comp_count = 0;
         for (uint32_t i = 0; i < m_injected_vehicles; ++i) {
+            m_vehicles[i].id = static_cast<int32_t>(i);
             m_vehicles[i].segment_id = seg_ids[i];
             m_vehicles[i].lane = lanes[i];
             m_vehicles[i].cell_idx = cells[i];
             m_vehicles[i].velocity = vels[i];
             m_vehicles[i].active = (active[i] != 0);
+            m_vehicles[i].cells_traveled = cells_trav[i];
+            m_vehicles[i].steps_traveled = steps_trav[i];
             if (m_vehicles[i].active) act_count++;
             else comp_count++;
         }
         m_active_vehicle_count = act_count;
         m_completed_vehicles = comp_count;
     }
-    // Synchronize global cell grid from device to host
     CUDA_CALL(cudaMemcpy(m_h_current_cells.data(), m_device_arrays.d_current_cells, m_total_cells * sizeof(int32_t), cudaMemcpyDeviceToHost));
     update_metrics();
 #endif
