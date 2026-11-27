@@ -78,8 +78,10 @@ snapshots/
 Thumbs.db
 desktop.ini
 
-# Academic References / Course Guidelines
+# Academic References, Editable Word Drafts & Private Submission Copies
 docs/PDC_Project_List.pdf
+docs/*.docx
+docs/*Submission*
 
 # Local Agent Guides & Architecture Specs
 AGENTS.md

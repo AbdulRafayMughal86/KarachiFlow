@@ -132,7 +132,7 @@ src/parallel/     OpenMP, MS-MPI, Hybrid (MPI + OpenMP), and CUDA GPU simulation
 src/main.cpp      Unified CLI entrypoint, timer harness, and benchmark runner
 scripts/          OSMnx map preprocessor, Streamlit/PyDeck dashboard, and benchmark suites
 data/benchmarks/  Empirical 3,600-step CSV timings, JSON summaries, and scaling plots
-docs/             Project report (.docx), proposal (.pdf), and dashboard screenshots
+docs/             Project report (.pdf), proposal (.pdf), and dashboard screenshots
 ```
 
 ---
