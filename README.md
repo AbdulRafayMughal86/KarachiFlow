@@ -161,14 +161,30 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Build the C++ and CUDA binaries
+### 2. Generate the Karachi road network binary
+
+Large binary road maps are excluded from Git. Before running the C++ simulator on a fresh clone, generate the binary network file once:
+
+```bash
+# Urban Core map (Tier 1, downloads from OpenStreetMap and builds data/karachi_network.bin)
+python scripts/preprocess_graph.py --mode dev
+
+# Offline fallback (no internet required, builds a synthetic Karachi test grid)
+python scripts/preprocess_graph.py --mode synthetic
+```
+
+Use `--mode full` for Metropolitan Karachi (Tier 2) or `--mode regional` for the Regional Mega-Corridor (Tier 3).
+
+### 3. Build the C++ binaries
 
 ```bash
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-### 3. Run the simulator
+Compiled binaries are placed in `bin/` (or `bin/Release/` on Windows MSVC multi-config builds).
+
+### 4. Run the simulator
 
 ```bash
 # Quick developer run (5,000 vehicles, 60 steps, finishes in < 1 second)
@@ -186,11 +202,11 @@ mpiexec -n 4 ./bin/karachiflow --mpi --cars 50000 --steps 60
 # Hybrid MPI + OpenMP run (4 MPI ranks x 2 OpenMP threads)
 mpiexec -n 4 ./bin/karachiflow --hybrid --threads 2 --cars 50000 --steps 60
 
-# Native CUDA GPU execution
-./bin/karachiflow_gpu --cuda --cars 500000 --steps 3600 --snapshot-interval 0
+# CUDA GPU execution (uses GPU when built with CUDA, otherwise CPU SoA fallback)
+./bin/karachiflow --cuda --cars 500000 --steps 3600 --snapshot-interval 0
 ```
 
-### 4. Launch the interactive dashboard
+### 5. Launch the interactive dashboard
 
 ```bash
 streamlit run scripts/dashboard.py
@@ -221,7 +237,7 @@ mpiexec -n 4 ./bin/test_mpi_simulation
 mpiexec -n 2 ./bin/test_hybrid_simulation
 
 # 6. CUDA GPU zero-collision and conservation check (50,000 vehicles)
-./bin/test_cuda_simulation_gpu 50000
+./bin/test_cuda_simulation 50000
 
 # 7. Python unit test suite
 python -m unittest discover tests
